@@ -1,0 +1,5 @@
+# Dónde encontrar res\esme_res.lib (ícono, manifiesto y versión), enlazada desde main.rs.
+# Se genera con tools\build-res.ps1; no hace falta build.rs (Kaspersky marca sus ejecutables).
+# Ruta relativa a la raíz del proyecto (cargo compila desde ahí).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-L", "native=res"]
