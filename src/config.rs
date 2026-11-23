@@ -33,11 +33,14 @@ pub struct Config {
     /// Ejecutables extra que cuentan como juego (ej. "minecraft.exe"). Roblox ya viene incluido.
     #[nserde(default)]
     pub juegos_extra: Vec<String>,
+    /// Tema del menú de la bandeja: "oscuro" (por defecto) o "claro".
+    #[nserde(default)]
+    pub tema_menu: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { mascota: true, mascota_tipo: "esme".into(), notch_minimo: false, transparente: false, mover_monitor: true, juegos_extra: Vec::new() }
+        Self { mascota: true, mascota_tipo: "esme".into(), notch_minimo: false, transparente: false, mover_monitor: true, juegos_extra: Vec::new(), tema_menu: "oscuro".into() }
     }
 }
 
@@ -148,3 +151,15 @@ pub fn set_autostart(enable: bool) {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lee_config_completa() {
+        let j = r#"{"mascota":true,"mascota_tipo":"esme","notch_minimo":false,"transparente":false,"mover_monitor":true,"juegos_extra":[],"tema_menu":"claro"}"#;
+        let c = Config::deserialize_json(j).expect("config válida");
+        assert_eq!(c.tema_menu, "claro");
+    }
+}

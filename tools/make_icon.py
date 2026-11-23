@@ -2,8 +2,7 @@
 
 Herramienta de desarrollo, se corre a mano solo si cambia el ícono:
     python tools/make_icon.py
-(No usamos build.rs: Kaspersky marca como sospechosos los ejecutables temporales
-que Cargo compila para los build scripts.)
+(Se hace aparte para no necesitar un build.rs.)
 """
 from pathlib import Path
 

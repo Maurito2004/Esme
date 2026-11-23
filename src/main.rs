@@ -1292,11 +1292,10 @@ impl App {
                 self.check_fullscreen();
             }
             CMD_OCR => ocr::start(self.hwnd),
-            CMD_AJUSTES => unsafe {
+            CMD_TEMA_OSCURO | CMD_TEMA_CLARO => {
+                self.cfg.tema_menu = if cmd == CMD_TEMA_CLARO { "claro" } else { "oscuro" }.into();
                 let _ = self.cfg.save();
-                let path = HSTRING::from(config::config_path().as_os_str());
-                ShellExecuteW(None, w!("open"), w!("notepad.exe"), &path, PCWSTR::null(), SW_SHOWNORMAL);
-            },
+            }
             CMD_SALIR => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
@@ -1373,6 +1372,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            // Menú de la bandeja dibujado por nosotros (tema oscuro/claro).
+            WM_MEASUREITEM if tray::measure_item(lp) => LRESULT(1),
+            WM_DRAWITEM if tray::draw_item(lp) => LRESULT(1),
             // Los mismos comandos del menú, también por mensaje (útil para automatizar).
             WM_COMMAND => {
                 let cmd = (wp.0 & 0xFFFF) as u32;
@@ -1429,6 +1431,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                                     minimo: a.cfg.notch_minimo,
                                     transparente: a.cfg.transparente,
                                     mover: a.cfg.mover_monitor,
+                                    dark: a.cfg.tema_menu != "claro",
                                 },
                             )
                         });

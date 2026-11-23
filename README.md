@@ -72,14 +72,13 @@ cargo build --release
 
 `cargo test --release` corre los tests; `cargo test --release -- --ignored` además prueba lrclib.net.
 
-### Antivirus (Kaspersky)
+### Sin build scripts
 
-Kaspersky marca como `VHO:Exploit.Win32.Convagent.gen` (heurística genérica, falso positivo) a los
-*build scripts* que Cargo compila y ejecuta para algunas librerías. Para evitarlo, Esme:
-- usa `windows` 0.61 (enlaza con `windows-link`, sin build script) y `nanoserde` en vez de `serde_json`;
-- no tiene `build.rs`: el ícono sale de `assets\Esme.jpg` con `python tools\make_icon.py` (Pillow), y
-  el ícono, manifiesto y versión se compilan aparte (`tools\build-res.ps1`) y se enlazan desde `main.rs`;
-- usa WinHTTP del sistema en vez de librerías HTTP/TLS de terceros.
+El proyecto compila sin `build.rs` ni dependencias con build scripts:
+- `windows` 0.61 (enlaza con `windows-link`) y `nanoserde` para JSON;
+- el ícono sale de `assets\Esme.jpg` con `python tools\make_icon.py` (Pillow), y el ícono,
+  manifiesto y versión se compilan con `tools\build-res.ps1` y se enlazan desde `main.rs`;
+- HTTP con WinHTTP del sistema.
 
 `Esme.exe` lleva nombre, versión, descripción, manifiesto e ícono propios.
 

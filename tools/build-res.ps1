@@ -1,6 +1,6 @@
 # Compila res\esme.rc -> res\esme_res.lib (ícono, manifiesto y versión) con las
-# herramientas del Windows SDK/MSVC. Se usa en lugar de un build.rs para no generar
-# ejecutables temporales durante el build (Kaspersky los marca como sospechosos).
+# herramientas del Windows SDK/MSVC, en lugar de un build.rs (el build queda sin
+# ejecutables auxiliares y más rápido).
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $rc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\rc.exe" |
