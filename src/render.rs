@@ -25,6 +25,8 @@ pub enum Collapsed<'a> {
     Mascot { time: &'a str, eyes: Eyes, pet: Pet },
     Media { time: &'a str },
     Lyric(&'a str),
+    /// Overlay del sistema: ícono, texto y, si corresponde, un nivel 0..1 (volumen).
+    Overlay { glyph: &'a str, text: &'a str, level: Option<f32> },
 }
 
 pub enum LyricsView<'a> {
@@ -334,6 +336,31 @@ impl Renderer {
                     let x = right - 34.0 + i as f32 * 5.0;
                     let rr = D2D1_ROUNDED_RECT { rect: rect(x, h / 2.0 - bh / 2.0, x + 3.0, h / 2.0 + bh / 2.0), radiusX: 1.5, radiusY: 1.5 };
                     unsafe { self.ctx.FillRoundedRectangle(&rr, &accent) };
+                }
+            }
+            Collapsed::Overlay { glyph, text, level } => {
+                let icon = R::new(left + 12.0, 0.0, left + 40.0, h);
+                self.label(glyph, &self.fonts.icon, icon, (1.0, 1.0, 1.0, 0.95 * a), false)?;
+                match level {
+                    Some(v) => {
+                        let track = R::new(left + 48.0, h / 2.0 - 2.0, right - 52.0, h / 2.0 + 2.0);
+                        let bg = self.brush(1.0, 1.0, 1.0, 0.22 * a)?;
+                        let fg = self.brush(1.0, 0.72, 0.32, 0.95 * a)?; // ámbar de Esme
+                        let full = D2D1_ROUNDED_RECT { rect: d2r(track), radiusX: 2.0, radiusY: 2.0 };
+                        let x = track.l + (track.r - track.l) * v.clamp(0.0, 1.0);
+                        let done = D2D1_ROUNDED_RECT { rect: rect(track.l, track.t, x.max(track.l + 4.0), track.b), radiusX: 2.0, radiusY: 2.0 };
+                        unsafe {
+                            self.ctx.FillRoundedRectangle(&full, &bg);
+                            if *v > 0.0 {
+                                self.ctx.FillRoundedRectangle(&done, &fg);
+                            }
+                        }
+                        self.text(text, &self.fonts.small, R::new(right - 50.0, 0.0, right - 10.0, h), &white);
+                    }
+                    None => {
+                        let r = R::new(left + 44.0, 0.0, right - 14.0, h);
+                        self.text(text, &self.fonts.pill_lyric, r, &white);
+                    }
                 }
             }
             Collapsed::Lyric(line) => {

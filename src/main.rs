@@ -12,6 +12,7 @@ mod anim;
 mod clipboard;
 mod ocr;
 mod shelf;
+mod system;
 mod config;
 mod fullscreen;
 mod http;
@@ -69,6 +70,19 @@ const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 const T_TOAST: usize = 14;
 const T_DROPCLOSE: usize = 15;
 const HOTKEY_OCR: i32 = 1;
+const T_OVERLAY: usize = 16;
+const OVERLAY_MS: u32 = 1600;
+const WM_INPUT: u32 = 0x00FF;
+const WM_POWERBROADCAST: u32 = 0x0218;
+const PBT_POWERSETTINGCHANGE: usize = 0x8013;
+const HSHELL_LANGUAGE: usize = 8;
+
+/// Overlay del sistema que se está mostrando en la píldora.
+struct SysOverlay {
+    glyph: &'static str,
+    text: String,
+    level: Option<f32>,
+}
 const WM_APPBAR: u32 = WM_APP + 4;
 const ABN_FULLSCREENAPP: usize = 2;
 
@@ -152,6 +166,13 @@ struct App {
     _drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     // Aviso temporal en la píldora (ej. "Texto copiado").
     toast: Option<String>,
+    // Overlays del sistema (Fase 4).
+    overlay: Option<SysOverlay>,
+    audio: Option<system::Audio>,
+    caps_on: bool,
+    caps_held: bool,
+    shell_msg: u32,
+    last_ac: Option<u32>,
     // Mascota.
     mascot: Mascot,
     /// Última mascota elegida (para el fundido al desactivarla).
@@ -261,6 +282,12 @@ fn main() -> Result<()> {
             press: None,
             _drop_target: None,
             toast: None,
+            overlay: None,
+            audio: None,
+            caps_on: false,
+            caps_held: false,
+            shell_msg: 0,
+            last_ac: None,
             mascot: Mascot::new(),
             last_pet: config::Pet::Esme,
             blink_timer: false,
@@ -298,6 +325,23 @@ fn main() -> Result<()> {
         with_app(|a| a._drop_target = Some(target));
         use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT};
         let _ = RegisterHotKey(Some(hwnd), HOTKEY_OCR, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32);
+
+        // Overlays del sistema: audio, Bloq Mayús, idioma del teclado y cargador (todo por eventos).
+        let audio = system::Audio::new(hwnd);
+        system::register_keyboard(hwnd);
+        let _ = RegisterShellHookWindow(hwnd);
+        let shell_msg = RegisterWindowMessageW(w!("SHELLHOOK"));
+        let _ = windows::Win32::System::Power::RegisterPowerSettingNotification(
+            HANDLE(hwnd.0),
+            &windows::Win32::System::SystemServices::GUID_ACDC_POWER_SOURCE,
+            DEVICE_NOTIFY_WINDOW_HANDLE,
+        );
+        let caps = windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x14) & 1 != 0;
+        with_app(|a| {
+            a.audio = audio;
+            a.shell_msg = shell_msg;
+            a.caps_on = caps;
+        });
 
         run_loop();
         APP.with(|a| a.borrow_mut().take());
@@ -360,11 +404,13 @@ impl App {
     }
 
     fn mascot_shown(&self) -> bool {
-        self.toast.is_none() && self.cfg.pet().is_some() && !self.cfg.notch_minimo && !self.lyric_pill() && !self.playing()
+        self.toast.is_none() && self.overlay.is_none() && self.cfg.pet().is_some() && !self.cfg.notch_minimo && !self.lyric_pill() && !self.playing()
     }
 
     fn collapsed_dims(&self) -> Dims {
-        if self.lyric_pill() || self.toast.is_some() {
+        if self.overlay.is_some() {
+            ui::PILL_OVERLAY
+        } else if self.lyric_pill() || self.toast.is_some() {
             ui::PILL_LYRIC
         } else if self.cfg.notch_minimo {
             ui::MINIMAL
@@ -541,7 +587,9 @@ impl App {
         let eyes = self.mascot.eyes();
         let tiles: Vec<(&'static str, String)> =
             self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
-        let collapsed = if let Some(t) = &self.toast {
+        let collapsed = if let Some(o) = &self.overlay {
+            Collapsed::Overlay { glyph: o.glyph, text: &o.text, level: o.level }
+        } else if let Some(t) = &self.toast {
             Collapsed::Lyric(t)
         } else if self.lyric_pill() {
             Collapsed::Lyric(&line)
@@ -810,6 +858,11 @@ impl App {
             }
             T_IDLE => self.check_idle(),
             T_FS => self.check_fullscreen(),
+            T_OVERLAY => {
+                self.overlay = None;
+                self.retarget();
+                self.refresh();
+            }
             T_TOAST => {
                 self.toast = None;
                 self.retarget();
@@ -1117,6 +1170,82 @@ impl App {
         self.refresh();
     }
 
+    // ---------- Overlays del sistema ----------
+
+    fn show_overlay(&mut self, glyph: &'static str, text: String, level: Option<f32>) {
+        if self.hidden {
+            return; // en modo juego no molestamos
+        }
+        self.overlay = Some(SysOverlay { glyph, text, level });
+        unsafe {
+            SetTimer(Some(self.hwnd), T_OVERLAY, OVERLAY_MS, None);
+        }
+        self.retarget();
+        self.refresh();
+    }
+
+    fn on_sys(&mut self, kind: usize, value: isize) {
+        match kind {
+            system::SYS_VOLUME => {
+                let pct = (value & 0xFF) as f32;
+                let muted = (value >> 8) & 1 == 1;
+                let glyph = if muted || pct == 0.0 {
+                    "\u{E74F}"
+                } else if pct < 34.0 {
+                    "\u{E993}"
+                } else if pct < 67.0 {
+                    "\u{E994}"
+                } else {
+                    "\u{E995}"
+                };
+                let text = if muted { "Mute".to_string() } else { format!("{}", pct as i32) };
+                self.show_overlay(glyph, text, Some(if muted { 0.0 } else { pct / 100.0 }));
+            }
+            system::SYS_AUDIO_DEVICE => {
+                if let Some(a) = self.audio.as_mut() {
+                    a.attach_default();
+                    let name = a.device_name.clone();
+                    if !name.is_empty() {
+                        self.show_overlay("\u{E7F6}", name, None);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_caps(&mut self) {
+        self.caps_on = !self.caps_on;
+        let text = if self.caps_on { "Bloq Mayús activado" } else { "Bloq Mayús desactivado" };
+        self.show_overlay("\u{E765}", text.into(), None);
+    }
+
+    fn on_power(&mut self, lp: LPARAM) {
+        use windows::Win32::System::Power::{GetSystemPowerStatus, POWERBROADCAST_SETTING, SYSTEM_POWER_STATUS};
+        unsafe {
+            let s = &*(lp.0 as *const POWERBROADCAST_SETTING);
+            if s.PowerSetting != windows::Win32::System::SystemServices::GUID_ACDC_POWER_SOURCE || s.DataLength < 4 {
+                return;
+            }
+            let src = *(s.Data.as_ptr() as *const u32);
+            let prev = self.last_ac.replace(src);
+            if prev.is_none() || prev == Some(src) {
+                return; // el primer aviso es el estado inicial
+            }
+            let mut st = SYSTEM_POWER_STATUS::default();
+            let _ = GetSystemPowerStatus(&mut st);
+            if st.BatteryFlag == 128 {
+                return; // PC sin batería
+            }
+            let pct = if st.BatteryLifePercent <= 100 { format!(" · {}%", st.BatteryLifePercent) } else { String::new() };
+            if src == 0 {
+                self.show_overlay("\u{E945}", format!("Cargando{pct}"), None);
+            } else {
+                self.show_overlay("\u{E83F}", format!("Con batería{pct}"), None);
+            }
+        }
+    }
+
     fn on_ocr_done(&mut self) {
         match ocr::take_result() {
             Some(Ok(text)) => {
@@ -1407,6 +1536,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 with_app(|a| a.on_clipboard());
                 LRESULT(0)
             }
+            system::WM_SYS => {
+                with_app(|a| a.on_sys(wp.0, lp.0));
+                LRESULT(0)
+            }
+            WM_INPUT => {
+                with_app(|a| {
+                    if system::is_caps_down(lp, &mut a.caps_held) {
+                        a.on_caps();
+                    }
+                });
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            WM_POWERBROADCAST if wp.0 == PBT_POWERSETTINGCHANGE => {
+                with_app(|a| a.on_power(lp));
+                LRESULT(1)
+            }
             WM_APPBAR => {
                 if wp.0 == ABN_FULLSCREENAPP {
                     SetTimer(Some(hwnd), T_FS, 80, None);
@@ -1464,6 +1609,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             _ => {
+                let sm = with_app(|a| a.shell_msg).unwrap_or(0);
+                if sm != 0 && msg == sm {
+                    if (wp.0 & 0x7FFF) == HSHELL_LANGUAGE {
+                        let name = system::layout_name(lp.0);
+                        if !name.is_empty() {
+                            with_app(|a| a.show_overlay("\u{E765}", name, None));
+                        }
+                    }
+                    return LRESULT(0);
+                }
                 let tc = with_app(|a| a.taskbar_created).unwrap_or(0);
                 if tc != 0 && msg == tc {
                     with_app(|a| a.tray.add());

@@ -15,6 +15,8 @@ pub const PILL: Dims = Dims { w: 200.0, h: 32.0 };
 pub const PILL_MEDIA: Dims = Dims { w: 236.0, h: 32.0 };
 pub const PILL_LYRIC: Dims = Dims { w: 460.0, h: 34.0 };
 pub const MINIMAL: Dims = Dims { w: 150.0, h: 5.0 };
+/// Píldora de los overlays del sistema (volumen, Bloq Mayús, idioma, cargador).
+pub const PILL_OVERLAY: Dims = Dims { w: 300.0, h: 34.0 };
 
 pub const EXP_CLOCK: Dims = Dims { w: 300.0, h: 92.0 };
 pub const EXP_MEDIA: Dims = Dims { w: 400.0, h: 126.0 };

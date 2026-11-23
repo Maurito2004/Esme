@@ -3,7 +3,7 @@
 Barra dinámica ("notch vivo") para Windows 10/11, en Rust nativo: Direct2D + DirectComposition,
 sin Electron, sin WebView, 100 % local.
 
-## Estado: v0.3 — Fases 1, 2 y 3 completas, parte de la Fase 4
+## Estado: v0.3 — Fases 1, 2 y 3 completas, Fase 4 casi completa
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -23,7 +23,15 @@ sin Electron, sin WebView, 100 % local.
   - Pestañean, miran hacia el cursor cuando está cerca, se duermen ("zzz") tras 3 minutos sin usar
     la PC y saludan (^ ^) al volver.
 
-**Modo juego / pantalla completa (adelanto de Fase 4)**
+**Fase 4 — overlays del sistema** (en la píldora, 1,6 s, todo por eventos de Windows)
+- Volumen y silencio (barra ámbar), vía callback de Core Audio.
+- Cambio de salida de audio, por ejemplo al conectar auriculares Bluetooth (muestra el nombre).
+- Bloq Mayús activado/desactivado (Raw Input; solo se mira esa tecla).
+- Cambio de idioma/distribución del teclado (shell hook).
+- Cargador conectado/desconectado con porcentaje (solo en equipos con batería).
+- Pendiente: brillo (laptops) y estado de Wi-Fi.
+
+**Modo juego / pantalla completa**
 - Si en el monitor principal hay un juego o un video a pantalla completa, el notch se pasa al otro
   monitor (opción de la bandeja "En pantalla completa: pasar al otro monitor") o se esconde, y vuelve
   solo al terminar. Roblox cuenta aunque esté maximizado con barra de título; otros juegos se agregan
