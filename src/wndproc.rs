@@ -126,7 +126,9 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             WM_TRAY => {
                 let event = (lp.0 & 0xFFFF) as u32;
                 match event {
-                    WM_CONTEXTMENU | WM_RBUTTONUP => {
+                    // Con NOTIFYICON_VERSION_4 el clic derecho manda WM_RBUTTONUP y después
+                    // WM_CONTEXTMENU: abrimos el menú una sola vez, con el segundo.
+                    WM_CONTEXTMENU => {
                         // El menú es modal (despacha mensajes): no retener el estado mientras está abierto.
                         let info = with_app(|a| {
                             (

@@ -81,6 +81,7 @@ struct Paint {
 }
 
 thread_local! {
+    static MENU_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ITEMS: RefCell<Vec<Item>> = const { RefCell::new(Vec::new()) };
     static PAINT: RefCell<Option<Paint>> = const { RefCell::new(None) };
 }
@@ -133,6 +134,16 @@ impl Tray {
 
     /// Muestra el menú y devuelve el comando elegido (0 si se canceló).
     pub fn show_menu(&self, s: &MenuState) -> u32 {
+        // Si ya hay un menú abierto, no abrimos otro (pisaría sus datos de dibujo).
+        if MENU_OPEN.with(|o| o.replace(true)) {
+            return 0;
+        }
+        let cmd = self.show_menu_inner(s);
+        MENU_OPEN.with(|o| o.set(false));
+        cmd
+    }
+
+    fn show_menu_inner(&self, s: &MenuState) -> u32 {
         set_menu_theme(s.dark);
         prepare_paint(self.hwnd, s.dark);
         ITEMS.with(|i| i.borrow_mut().clear());
