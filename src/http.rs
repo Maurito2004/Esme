@@ -23,7 +23,7 @@ impl Drop for Handle {
 pub fn get(host: &str, path: &str) -> Option<Response> {
     unsafe {
         let session = Handle(WinHttpOpen(
-            w!("Esme/0.3 (app de escritorio para Windows)"),
+            w!("Esme/0.4 (app de escritorio para Windows)"),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),

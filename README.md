@@ -3,7 +3,13 @@
 Barra dinámica ("notch vivo") para Windows 10/11, en Rust nativo: Direct2D + DirectComposition,
 sin Electron, sin WebView, 100 % local.
 
-## Estado: v0.3 — Fases 1, 2 y 3 completas, Fase 4 casi completa
+## Descargar
+
+Bajá **Esme.exe** de la última versión en
+[Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
+arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
+
+## Estado: v0.4 — Fases 1, 2 y 3 completas, Fase 4 casi completa
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -26,10 +32,10 @@ sin Electron, sin WebView, 100 % local.
 **Fase 4 — overlays del sistema** (en la píldora, 1,6 s, todo por eventos de Windows)
 - Volumen y silencio (barra ámbar), vía callback de Core Audio.
 - Cambio de salida de audio, por ejemplo al conectar auriculares Bluetooth (muestra el nombre).
-- Bloq Mayús activado/desactivado (Raw Input; solo se mira esa tecla).
 - Cambio de idioma/distribución del teclado (shell hook).
 - Cargador conectado/desconectado con porcentaje (solo en equipos con batería).
-- Pendiente: brillo (laptops) y estado de Wi-Fi.
+- Pendiente: brillo (laptops) y estado de Wi-Fi. (Sin aviso de Bloq Mayús: requería leer el
+  teclado de todo el sistema y Esme no lo hace.)
 
 **Modo juego / pantalla completa**
 - Si en el monitor principal hay un juego o un video a pantalla completa, el notch se pasa al otro
@@ -69,6 +75,10 @@ Todo es por eventos: los cambios de música llegan de Windows; las letras usan u
 hasta la próxima línea; el pestañeo son 4 cuadros por timer.
 
 ## Compilar
+
+Cada tag `vX.Y.Z` que se sube compila Esme en GitHub Actions y publica el Release con el exe
+(`.github/workflows/release.yml`; notas en `docs/release-notes/`).
+
 
 Requisitos: Rust (`x86_64-pc-windows-msvc`) y VS 2022 Build Tools con C++.
 

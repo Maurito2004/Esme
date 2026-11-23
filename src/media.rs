@@ -114,11 +114,22 @@ pub fn start(hwnd: HWND) -> (Sender<Cmd>, Shared) {
                             }
                             session = current;
                         }
-                        let info = session.as_ref().and_then(|s| {
+                        let got = session.as_ref().and_then(|s| {
                             read_info(s, thumb || changed, &mut last_key, &mut thumb_id, &sh).ok()
                         });
-                        *sh.lock().unwrap() = info;
+                        let new_track = got.as_ref().map(|g| g.1).unwrap_or(false);
+                        *sh.lock().unwrap() = got.map(|g| g.0);
                         notify();
+                        if new_track {
+                            // La miniatura del video nuevo a veces llega tarde: revisamos de nuevo.
+                            let t = tx2.clone();
+                            std::thread::spawn(move || {
+                                for ms in [800u64, 1700] {
+                                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                                    let _ = t.send(Cmd::Refresh { thumb: true });
+                                }
+                            });
+                        }
                     }
                     other => {
                         if let Some(s) = &session {
@@ -172,7 +183,7 @@ fn read_info(
     last_key: &mut String,
     thumb_id: &mut u64,
     shared: &Shared,
-) -> Result<MediaInfo> {
+) -> Result<(MediaInfo, bool)> {
     let prev = shared.lock().unwrap().clone();
     // Avisos de solo posición/estado: reusamos título y carátula (pedirlos es lo caro).
     let props = match (&prev, want_thumb) {
@@ -214,22 +225,30 @@ fn read_info(
         info.stamp = now_filetime();
     }
 
-    // Carátula: solo se vuelve a leer cuando cambia la canción (es lo más pesado).
+    // Carátula: se relee en cada aviso de "cambió el contenido" (Brave/YouTube a veces cambian la
+    // miniatura sin cambiar el título, o la mandan tarde). Solo se re-decodifica si los bytes cambian.
     let key = format!("{}\u{1}{}\u{1}{}", info.title, info.artist, info.album);
-    let Some(props) = props else { return Ok(info) };
-    let reuse = !want_thumb || (key == *last_key && prev.as_ref().map(|p| p.thumb.is_some()).unwrap_or(false));
-    if reuse {
+    let Some(props) = props else { return Ok((info, false)) };
+    let changed_track = key != *last_key;
+    *last_key = key;
+    let fresh = read_thumb(&props).ok().flatten();
+    let same_bytes = match (&fresh, prev.as_ref().and_then(|p| p.thumb.as_ref())) {
+        (Some(a), Some(b)) => a.as_slice() == b.as_slice(),
+        _ => false,
+    };
+    if !changed_track && (same_bytes || fresh.is_none()) {
+        // Misma canción y misma miniatura (o todavía no llegó la nueva): mantenemos la actual.
         if let Some(p) = prev {
             info.thumb = p.thumb;
             info.thumb_id = p.thumb_id;
         }
     } else {
-        *last_key = key;
-        info.thumb = read_thumb(&props).ok().flatten().map(Arc::new);
+        // Canción nueva o miniatura nueva: nunca mostramos la anterior (sin imagen, va el ícono).
+        info.thumb = fresh.map(Arc::new);
         *thumb_id += 1;
         info.thumb_id = *thumb_id;
     }
-    Ok(info)
+    Ok((info, changed_track))
 }
 
 fn read_thumb(props: &GlobalSystemMediaTransportControlsSessionMediaProperties) -> Result<Option<Vec<u8>>> {

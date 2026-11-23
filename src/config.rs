@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
-    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
+    RegDeleteKeyValueW, RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ,
 };
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
@@ -53,7 +53,7 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
-/// Primera vez como Esme: traemos los datos de %APPDATA%\Noosa y el inicio automático.
+/// Al arrancar: traemos los datos de %APPDATA%\Noosa y el inicio automático.
 pub fn migrate_from_noosa() {
     let new = data_dir();
     if let Some(parent) = new.parent() {
@@ -62,15 +62,14 @@ pub fn migrate_from_noosa() {
             let _ = std::fs::rename(&old, &new);
         }
     }
-    let mut size = 0u32;
-    let had_old = unsafe {
-        RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, OLD_RUN_VALUE, RRF_RT_REG_SZ, None, None, Some(&mut size)) == ERROR_SUCCESS
-    };
-    if had_old {
-        unsafe {
-            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, OLD_RUN_VALUE);
+    // Versiones anteriores usaban la clave Run del Registro: pasamos a un acceso directo.
+    for name in [OLD_RUN_VALUE, RUN_VALUE] {
+        if had_run_value(name) {
+            unsafe {
+                let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, name);
+            }
+            set_autostart(true);
         }
-        set_autostart(true);
     }
 }
 
@@ -123,34 +122,45 @@ impl Config {
     }
 }
 
-pub fn autostart_enabled() -> bool {
-    let mut size = 0u32;
-    unsafe {
-        RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE, RRF_RT_REG_SZ, None, None, Some(&mut size))
-            == ERROR_SUCCESS
-    }
+/// Acceso directo en la carpeta Inicio del usuario (shell:startup).
+fn startup_link() -> Option<PathBuf> {
+    let base = std::env::var_os("APPDATA").map(PathBuf::from)?;
+    Some(base.join("Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Esme.lnk"))
 }
 
+/// Valor que ponían en el Registro las versiones anteriores ("Esme" o "Noosa").
+fn had_run_value(name: PCWSTR) -> bool {
+    let mut size = 0u32;
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, name, RRF_RT_REG_SZ, None, None, Some(&mut size)) == ERROR_SUCCESS }
+}
+
+pub fn autostart_enabled() -> bool {
+    startup_link().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Iniciar con Windows mediante un acceso directo en la carpeta Inicio (como la mayoría de las apps).
 pub fn set_autostart(enable: bool) {
+    let Some(link) = startup_link() else { return };
+    if !enable {
+        let _ = std::fs::remove_file(&link);
+        return;
+    }
+    use windows::core::{Interface, HSTRING};
+    use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
     unsafe {
-        if enable {
-            let Ok(exe) = std::env::current_exe() else { return };
-            let cmd = format!("\"{}\"", exe.display());
-            let wide: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
-            let _ = RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                RUN_KEY,
-                RUN_VALUE,
-                REG_SZ.0,
-                Some(wide.as_ptr() as *const _),
-                (wide.len() * 2) as u32,
-            );
-        } else {
-            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE);
+        let Ok(exe) = std::env::current_exe() else { return };
+        let Ok(sl) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else { return };
+        let _ = sl.SetPath(&HSTRING::from(exe.as_os_str()));
+        if let Some(dir) = exe.parent() {
+            let _ = sl.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()));
+        }
+        let _ = sl.SetDescription(&HSTRING::from("Esme - barra dinámica"));
+        if let Ok(pf) = sl.cast::<IPersistFile>() {
+            let _ = pf.Save(&HSTRING::from(link.as_os_str()), true);
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,8 @@
-//! Letras sincronizadas desde lrclib.net, con caché local en %APPDATA%\Noosa\letras.
+//! Letras sincronizadas desde lrclib.net, con caché local en %APPDATA%\Esme\letras.
+//!
+//! Búsqueda: junta candidatos de varias consultas (exacta, por artista+título y por texto libre)
+//! y solo acepta uno si el título se parece de verdad y la duración coincide. Así no aparecen
+//! letras de otra canción en un video cualquiera.
 
 use crate::http;
 use nanoserde::DeJson;
@@ -10,11 +14,17 @@ pub enum Lyrics {
     Synced(Vec<(f64, String)>),
     Plain(Vec<String>),
     NotFound,
+    /// Video muy largo (mezcla, radio, stream): no se busca letra.
+    Mix,
     Error,
 }
 
 #[derive(DeJson, Debug)]
 struct ApiTrack {
+    #[nserde(rename = "trackName", default)]
+    track: Option<String>,
+    #[nserde(rename = "artistName", default)]
+    artist: Option<String>,
     #[nserde(default)]
     duration: Option<f64>,
     #[nserde(rename = "syncedLyrics", default)]
@@ -25,67 +35,126 @@ struct ApiTrack {
     instrumental: Option<bool>,
 }
 
+/// Más de esto, es una mezcla o un stream: no tiene una letra.
+const MAX_SONG_SECS: f64 = 15.0 * 60.0;
+/// Un "no encontré" se vuelve a intentar pasados unos días (lrclib suma letras todo el tiempo).
+const NONE_TTL_SECS: u64 = 3 * 24 * 3600;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Palabras normalizadas (minúsculas, sin acentos ni signos) para comparar títulos.
+fn words(s: &str) -> Vec<String> {
+    let fold = |c: char| match c {
+        'á' | 'à' | 'ä' | 'â' => 'a',
+        'é' | 'è' | 'ë' | 'ê' => 'e',
+        'í' | 'ì' | 'ï' | 'î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' => 'u',
+        'ñ' => 'n',
+        c => c,
+    };
+    s.to_lowercase()
+        .chars()
+        .map(fold)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .map(String::from)
+        .collect()
+}
+
+/// Parecido entre dos textos: proporción de palabras de `a` que están en `b` (0..1).
+fn similarity(a: &str, b: &str) -> f64 {
+    let wa = words(a);
+    let wb = words(b);
+    if wa.is_empty() || wb.is_empty() {
+        return 0.0;
+    }
+    let hits = wa.iter().filter(|w| wb.contains(w)).count();
+    let r1 = hits as f64 / wa.len() as f64;
+    let hits2 = wb.iter().filter(|w| wa.contains(w)).count();
+    let r2 = hits2 as f64 / wb.len() as f64;
+    r1.max(r2) * 0.7 + r1.min(r2) * 0.3
+}
+
+fn get_json<T: DeJson>(path: &str, net_ok: &mut bool) -> Option<T> {
+    let r = http::get("lrclib.net", path)?;
+    *net_ok = true;
+    if r.status != 200 {
+        return None;
+    }
+    T::deserialize_json(&r.body).ok()
+}
+
+fn has_text(t: &ApiTrack) -> bool {
+    t.synced.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || t.plain.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || t.instrumental == Some(true)
+}
+
 /// Busca la letra (bloqueante: llamar desde un hilo de fondo).
 pub fn fetch(title: &str, artist: &str, album: &str, duration: f64) -> Lyrics {
+    if duration > MAX_SONG_SECS {
+        return Lyrics::Mix;
+    }
     let (artist, title) = clean(title, artist);
     if title.is_empty() {
         return Lyrics::NotFound;
     }
     let cache = cache_path(&artist, &title);
     if let Ok(s) = std::fs::read_to_string(&cache) {
-        return parse_stored(&s);
-    }
-
-    let mut best: Option<ApiTrack> = None;
-    let mut net_ok = false;
-
-    // 1) Coincidencia exacta (artista + título + duración).
-    let mut path = format!("/api/get?artist_name={}&track_name={}", http::encode(&artist), http::encode(&title));
-    if !album.is_empty() {
-        path += &format!("&album_name={}", http::encode(album));
-    }
-    if duration > 0.0 {
-        path += &format!("&duration={}", duration.round() as i64);
-    }
-    if let Some(r) = http::get("lrclib.net", &path) {
-        net_ok = true;
-        if r.status == 200 {
-            best = ApiTrack::deserialize_json(&r.body).ok();
+        let expired_none = s.starts_with("none")
+            && s.lines().nth(1).and_then(|t| t.trim().parse::<u64>().ok()).map(|t| now_secs() > t + NONE_TTL_SECS).unwrap_or(true);
+        if !expired_none {
+            return parse_stored(&s);
         }
     }
 
-    // 2) Búsqueda aproximada: preferimos letra sincronizada y duración parecida.
-    if best.as_ref().map(|b| b.synced.is_none()).unwrap_or(true) {
-        let path = format!("/api/search?artist_name={}&track_name={}", http::encode(&artist), http::encode(&title));
-        if let Some(r) = http::get("lrclib.net", &path) {
-            net_ok = true;
-            if r.status == 200 {
-                if let Ok(list) = Vec::<ApiTrack>::deserialize_json(&r.body) {
-                    let score = |t: &ApiTrack| {
-                        let d = match (t.duration, duration > 0.0) {
-                            (Some(td), true) => (td - duration).abs(),
-                            _ => 30.0,
-                        };
-                        (if t.synced.is_some() { 0.0 } else { 1000.0 }) + d
-                    };
-                    if let Some(c) = list.into_iter().min_by(|a, b| score(a).total_cmp(&score(b))) {
-                        let better = best.as_ref().map(|b| b.synced.is_none() && c.synced.is_some()).unwrap_or(true);
-                        let close = match (c.duration, duration > 0.0) {
-                            (Some(td), true) => (td - duration).abs() < 8.0,
-                            _ => true,
-                        };
-                        if better && close {
-                            best = Some(c);
-                        }
-                    }
-                }
-            }
+    let mut net_ok = false;
+    let mut candidates: Vec<ApiTrack> = Vec::new();
+
+    // 1) Coincidencia exacta (artista + título + duración).
+    if !artist.is_empty() {
+        let mut path = format!("/api/get?artist_name={}&track_name={}", http::encode(&artist), http::encode(&title));
+        if !album.is_empty() {
+            path += &format!("&album_name={}", http::encode(album));
+        }
+        if duration > 0.0 {
+            path += &format!("&duration={}", duration.round() as i64);
+        }
+        if let Some(t) = get_json::<ApiTrack>(&path, &mut net_ok) {
+            candidates.push(t);
+        }
+    }
+    // 2) Búsquedas aproximadas: por campos y por texto libre (sirve cuando el "artista" es el
+    //    nombre del canal de YouTube y no el del músico).
+    let mut queries = Vec::new();
+    if !artist.is_empty() {
+        queries.push(format!("/api/search?artist_name={}&track_name={}", http::encode(&artist), http::encode(&title)));
+        queries.push(format!("/api/search?q={}", http::encode(&format!("{artist} {title}"))));
+    }
+    queries.push(format!("/api/search?q={}", http::encode(&title)));
+    for q in queries {
+        if candidates.iter().any(|c| c.synced.is_some() && score(c, &artist, &title, duration).is_some()) {
+            break; // ya hay una sincronizada que coincide
+        }
+        if let Some(list) = get_json::<Vec<ApiTrack>>(&q, &mut net_ok) {
+            candidates.extend(list.into_iter().take(15));
         }
     }
 
     if !net_ok {
         return Lyrics::Error;
     }
+    let best = candidates
+        .into_iter()
+        .filter(has_text)
+        .filter_map(|c| score(&c, &artist, &title, duration).map(|s| (s, c)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, c)| c);
+
     let stored = match &best {
         Some(t) if t.synced.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) => {
             format!("synced\n{}", t.synced.as_deref().unwrap())
@@ -94,11 +163,35 @@ pub fn fetch(title: &str, artist: &str, album: &str, duration: f64) -> Lyrics {
             format!("plain\n{}", t.plain.as_deref().unwrap())
         }
         Some(t) if t.instrumental == Some(true) => "instrumental\n".to_string(),
-        _ => "none\n".to_string(),
+        _ => format!("none\n{}", now_secs()),
     };
     let _ = std::fs::create_dir_all(cache.parent().unwrap());
     let _ = std::fs::write(&cache, &stored);
     parse_stored(&stored)
+}
+
+/// Puntaje de un candidato, o None si no es la misma canción.
+fn score(c: &ApiTrack, artist: &str, title: &str, duration: f64) -> Option<f64> {
+    let track = c.track.as_deref().unwrap_or("");
+    let t_sim = similarity(title, track).max(similarity(&format!("{artist} {title}"), track));
+    if t_sim < 0.6 {
+        return None;
+    }
+    let d = match (c.duration, duration > 0.0) {
+        (Some(cd), true) => {
+            let d = (cd - duration).abs();
+            if d > 7.0 {
+                return None; // otra versión / otra canción
+            }
+            d
+        }
+        // Sin duración del reproductor: exigimos que el título coincida casi exacto.
+        _ if t_sim < 0.9 => return None,
+        _ => 3.0,
+    };
+    let a_sim = if artist.is_empty() { 0.5 } else { similarity(artist, c.artist.as_deref().unwrap_or("")) };
+    let synced = if c.synced.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) { 1.0 } else { 0.0 };
+    Some(t_sim * 3.0 + a_sim * 1.5 + synced * 2.0 - d * 0.15)
 }
 
 fn parse_stored(s: &str) -> Lyrics {
@@ -240,6 +333,27 @@ mod tests {
             other => panic!("esperaba letra sincronizada, llegó {other:?}"),
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parecido_de_titulos() {
+        assert!(similarity("De Música Ligera", "De musica ligera") > 0.95);
+        assert!(similarity("Persiana Americana", "Un video cualquiera de Twitter") < 0.3);
+    }
+
+    #[test]
+    fn rechaza_otra_cancion() {
+        let c = ApiTrack {
+            track: Some("Otra Cancion".into()),
+            artist: Some("Alguien".into()),
+            duration: Some(200.0),
+            synced: Some("[00:01.00] hola".into()),
+            plain: None,
+            instrumental: None,
+        };
+        assert!(score(&c, "Soda Stereo", "Persiana Americana", 200.0).is_none());
+        let ok = ApiTrack { track: Some("Persiana Americana".into()), artist: Some("Soda Stereo".into()), ..c };
+        assert!(score(&ok, "Soda Stereo", "Persiana Americana", 202.0).is_some());
     }
 
     #[test]

@@ -1,7 +1,6 @@
 //! Overlays del sistema (Fase 4), todo por eventos de Windows, sin polling:
 //! - Volumen y silencio: callback de Core Audio (IAudioEndpointVolumeCallback).
 //! - Cambio de salida de audio (ej. conectar auriculares Bluetooth): IMMNotificationClient.
-//! - Bloq Mayús: Raw Input de teclado (solo se mira la tecla Bloq Mayús).
 //! - Idioma del teclado: shell hook (HSHELL_LANGUAGE).
 //! - Cargador conectado / desconectado: notificación de energía (GUID_ACDC_POWER_SOURCE).
 
@@ -149,47 +148,5 @@ pub fn layout_name(hkl: isize) -> String {
         let mut out = [0u16; 128];
         let m = GetLocaleInfoEx(PCWSTR(name.as_ptr()), LOCALE_SLOCALIZEDDISPLAYNAME, Some(&mut out));
         String::from_utf16_lossy(&out[..(m.max(1) - 1) as usize])
-    }
-}
-
-/// Raw Input de teclado en segundo plano: solo para detectar Bloq Mayús.
-pub fn register_keyboard(hwnd: HWND) {
-    use windows::Win32::UI::Input::{RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_INPUTSINK};
-    let dev = RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd };
-    unsafe {
-        let _ = RegisterRawInputDevices(&[dev], std::mem::size_of::<RAWINPUTDEVICE>() as u32);
-    }
-}
-
-/// Devuelve true si el WM_INPUT es "Bloq Mayús presionada" (no repetición ni soltar).
-pub fn is_caps_down(lp: LPARAM, held: &mut bool) -> bool {
-    use windows::Win32::UI::Input::{GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT, RIM_TYPEKEYBOARD};
-    unsafe {
-        let mut raw = RAWINPUT::default();
-        let mut size = std::mem::size_of::<RAWINPUT>() as u32;
-        let got = GetRawInputData(
-            HRAWINPUT(lp.0 as *mut _),
-            RID_INPUT,
-            Some(&mut raw as *mut _ as *mut _),
-            &mut size,
-            std::mem::size_of::<RAWINPUTHEADER>() as u32,
-        );
-        if got == u32::MAX || raw.header.dwType != RIM_TYPEKEYBOARD.0 {
-            return false;
-        }
-        let kb = raw.data.keyboard;
-        if kb.VKey != 0x14 {
-            return false; // VK_CAPITAL
-        }
-        let up = kb.Flags & 1 != 0; // RI_KEY_BREAK
-        if up {
-            *held = false;
-            return false;
-        }
-        if *held {
-            return false; // auto-repetición
-        }
-        *held = true;
-        true
     }
 }
