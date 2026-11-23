@@ -9,6 +9,9 @@ impl App {
         if self.hidden {
             return; // en modo juego no molestamos
         }
+        if let Some(v) = level {
+            self.level.set_target(v);
+        }
         self.overlay = Some(SysOverlay { glyph, text, level });
         unsafe {
             SetTimer(Some(self.hwnd), T_OVERLAY, OVERLAY_MS, None);

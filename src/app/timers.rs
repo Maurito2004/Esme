@@ -135,6 +135,11 @@ impl App {
             }
             T_TOAST => {
                 self.toast = None;
+                if std::mem::take(&mut self.greet_after_toast) {
+                    // La mascota aparece saludando (^ ^ con saltito).
+                    self.mascot.greet();
+                    unsafe { SetTimer(Some(self.hwnd), T_GREET, mascot::GREET_LEN.as_millis() as u32, None) };
+                }
                 self.retarget();
                 self.refresh();
             }

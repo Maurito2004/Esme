@@ -91,7 +91,10 @@ impl App {
             && self.sh.is_settled()
             && self.expand.is_settled()
             && self.mascot_vis.is_settled()
-            && self.lyric_scroll.is_settled())
+            && self.lyric_scroll.is_settled()
+            && self.level.is_settled())
+            || self.mascot.hopping()
+            || self.renderer.as_ref().map(|r| r.animating()).unwrap_or(false)
     }
 
     // ---------- Animación ----------
@@ -126,7 +129,7 @@ impl App {
         let now = self.now();
         let dt = (((now - self.last_tick) as f64 / self.qpf as f64) as f32).clamp(0.0, 1.0 / 20.0);
         self.last_tick = now;
-        for s in [&mut self.sw, &mut self.sh, &mut self.expand, &mut self.mascot_vis, &mut self.lyric_scroll] {
+        for s in [&mut self.sw, &mut self.sh, &mut self.expand, &mut self.mascot_vis, &mut self.lyric_scroll, &mut self.level] {
             s.step(dt);
         }
         self.redraw_with(true);

@@ -133,6 +133,18 @@ impl App {
         self.refresh();
     }
 
+    /// Bienvenida al abrir Esme: "¡Hola! Buenos días / Buenas tardes / Buenas noches".
+    pub(crate) fn say_hello(&mut self) {
+        let h = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() }.wHour;
+        let text = match h {
+            5..=11 => "¡Hola! Buenos días ☀",
+            12..=19 => "¡Hola! Buenas tardes",
+            _ => "¡Hola! Buenas noches ☾",
+        };
+        self.greet_after_toast = self.cfg.pet().is_some();
+        self.show_toast(text.into(), 2600);
+    }
+
     /// Bandeja → Calendario → Pegar URL iCal copiada.
     pub(crate) fn paste_ical(&mut self) {
         let text = clipboard::read_text(self.hwnd).unwrap_or_default();

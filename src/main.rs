@@ -193,6 +193,10 @@ struct App {
     inbox: Arc<Mutex<DataInbox>>,
     // Overlays del sistema (Fase 4).
     overlay: Option<SysOverlay>,
+    /// Nivel animado de la barra del overlay (el volumen se desliza al valor nuevo).
+    level: Spring,
+    /// Al terminar el saludo de bienvenida, la mascota saluda con un saltito.
+    greet_after_toast: bool,
     audio: Option<system::Audio>,
     shell_msg: u32,
     last_ac: Option<u32>,
@@ -314,6 +318,8 @@ fn main() -> Result<()> {
             cal_msg: String::new(),
             inbox: Arc::new(Mutex::new(DataInbox::default())),
             overlay: None,
+            level: Spring::new(0.0, 320.0, 0.05).with_eps(0.002),
+            greet_after_toast: false,
             audio: None,
             shell_msg: 0,
             last_ac: None,
@@ -347,6 +353,7 @@ fn main() -> Result<()> {
         };
         windows::Win32::UI::Shell::SHAppBarMessage(windows::Win32::UI::Shell::ABM_NEW, &mut abd);
         with_app(|a| a.check_fullscreen());
+        with_app(|a| a.say_hello());
         let _ = windows::Win32::System::DataExchange::AddClipboardFormatListener(hwnd);
         // Estante: el notch acepta archivos arrastrados. OCR: atajo global Ctrl+Alt+T.
         let target = shelf::DropTarget::new(hwnd);

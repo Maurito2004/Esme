@@ -104,6 +104,8 @@ pub struct Frame<'a> {
     pub shelf: Option<ShelfView<'a>>,
     /// Panel "Hoy" abierto.
     pub today: Option<TodayView<'a>>,
+    /// Color de acento: el de los ojos de la mascota (ámbar en Esme, blanco en el gato).
+    pub accent: (f32, f32, f32),
 }
 
 struct Fonts {
@@ -132,6 +134,9 @@ pub struct Renderer {
     fonts: Fonts,
     wic: Option<IWICImagingFactory>,
     art: Option<ID2D1Bitmap1>,
+    /// Carátula anterior, para el fundido al cambiar de canción.
+    prev_art: Option<ID2D1Bitmap1>,
+    art_changed: Option<std::time::Instant>,
     art_bytes: Option<std::sync::Arc<Vec<u8>>>,
     width_px: u32,
     height_px: u32,
@@ -145,6 +150,10 @@ const G_PLAY: &str = "\u{E768}";
 const G_PAUSE: &str = "\u{E769}";
 const G_LYRICS: &str = "\u{E8E4}";
 const G_MUSIC: &str = "\u{E8D6}";
+/// Duración del fundido entre carátulas.
+const ART_FADE_SECS: f32 = 0.35;
+/// Azul de la marca (borde del notch).
+const BLUE: (f32, f32, f32) = (0.27, 0.45, 1.0);
 const G_CLIP: &str = "\u{E77F}";
 const G_SHELF: &str = "\u{E8B7}";
 const G_TODAY: &str = "\u{E787}";
@@ -224,6 +233,8 @@ impl Renderer {
                 wic,
                 art: None,
                 art_bytes: None,
+                prev_art: None,
+                art_changed: None,
                 width_px,
                 height_px,
                 scale,
@@ -274,8 +285,20 @@ impl Renderer {
         if same {
             return;
         }
+        self.prev_art = self.art.take();
         self.art = bytes.as_ref().and_then(|b| self.decode(b).ok());
         self.art_bytes = bytes;
+        self.art_changed = Some(std::time::Instant::now());
+    }
+
+    /// Avance del fundido de carátula (1 = terminado).
+    fn art_fade(&self) -> f32 {
+        self.art_changed.map(|t| (t.elapsed().as_secs_f32() / ART_FADE_SECS).min(1.0)).unwrap_or(1.0)
+    }
+
+    /// ¿Hay una animación propia del renderer en curso? (fundido de carátula)
+    pub fn animating(&self) -> bool {
+        self.art_fade() < 1.0 && (self.prev_art.is_some() || self.art.is_some())
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<ID2D1Bitmap1> {
@@ -307,6 +330,23 @@ impl Renderer {
             let geo = self.notch_geometry(f.cx, f.shape_w, f.shape_h, f.radius, f.ear)?;
             let black = self.brush(0.0, 0.0, 0.0, 1.0)?;
             self.ctx.FillGeometry(&geo, &black, None);
+
+            // Borde de luz al expandir: degradé azul → color de los ojos de la mascota.
+            let glow = clamp01(f.expand);
+            if glow > 0.02 && !f.transparent {
+                let stops = [
+                    D2D1_GRADIENT_STOP { position: 0.0, color: rgba(BLUE.0, BLUE.1, BLUE.2, 0.75 * glow) },
+                    D2D1_GRADIENT_STOP { position: 0.5, color: rgba(BLUE.0, BLUE.1, BLUE.2, 0.15 * glow) },
+                    D2D1_GRADIENT_STOP { position: 1.0, color: rgba(f.accent.0, f.accent.1, f.accent.2, 0.75 * glow) },
+                ];
+                let coll = self.ctx.CreateGradientStopCollection(&stops, D2D1_COLOR_SPACE_SRGB, D2D1_COLOR_SPACE_SRGB, D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_EXTEND_MODE_CLAMP, D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED)?;
+                let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: pt(f.cx - f.shape_w / 2.0, f.shape_h),
+                    endPoint: pt(f.cx + f.shape_w / 2.0, f.shape_h),
+                };
+                let gb = self.ctx.CreateLinearGradientBrush(&props, None, &coll)?;
+                self.ctx.DrawGeometry(&geo, &gb, 1.5, None);
+            }
 
             // Contenido contraído: en modo negro se desvanece al expandir; en transparente queda.
             let a_small = if f.transparent { 1.0 } else { clamp01(1.0 - f.expand * 2.5) };
@@ -363,7 +403,7 @@ impl Renderer {
                     Some(v) => {
                         let track = R::new(left + 48.0, h / 2.0 - 2.0, right - 52.0, h / 2.0 + 2.0);
                         let bg = self.brush(1.0, 1.0, 1.0, 0.22 * a)?;
-                        let fg = self.brush(1.0, 0.72, 0.32, 0.95 * a)?; // ámbar de Esme
+                        let fg = self.brush(f.accent.0, f.accent.1, f.accent.2, 0.95 * a)?; // color de la mascota
                         let full = D2D1_ROUNDED_RECT { rect: d2r(track), radiusX: 2.0, radiusY: 2.0 };
                         let x = track.l + (track.r - track.l) * v.clamp(0.0, 1.0);
                         let done = D2D1_ROUNDED_RECT { rect: rect(track.l, track.t, x.max(track.l + 4.0), track.b), radiusX: 2.0, radiusY: 2.0 };
@@ -436,7 +476,7 @@ impl Renderer {
                         unsafe { self.ctx.FillRoundedRectangle(&rr, &s) };
                     }
                     let bg = self.brush(1.0, 1.0, 1.0, 0.25 * a)?;
-                    let fg = self.brush(1.0, 1.0, 1.0, 0.92 * a)?;
+                    let fg = self.brush(f.accent.0, f.accent.1, f.accent.2, 0.92 * a)?;
                     let full = D2D1_ROUNDED_RECT { rect: d2r(t), radiusX: 2.0, radiusY: 2.0 };
                     let x = t.l + (t.r - t.l) * p.clamp(0.0, 1.0);
                     let done = D2D1_ROUNDED_RECT { rect: rect(t.l, t.t, x.max(t.l + 4.0), t.b), radiusX: 2.0, radiusY: 2.0 };
@@ -450,24 +490,32 @@ impl Renderer {
                     }
                 }
                 if let Some(ly) = &m.lyrics {
-                    self.draw_lyrics(ly, l.lyrics, a, sh, f.hover)?;
+                    let ap = self.stagger(a, rise);
+                    self.draw_lyrics(ly, l.lyrics, ap, sh, f.hover)?;
+                    self.unstagger(rise);
                 }
             }
         }
         let on = f.clip.is_some();
         self.button(G_CLIP, &self.fonts.icon, l.clip_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Clip) || on, sh)?;
         if let Some(cv) = &f.clip {
-            self.draw_clip(cv, l.clip, a, sh, f.hover)?;
+            let ap = self.stagger(a, rise);
+            self.draw_clip(cv, l.clip, ap, sh, f.hover)?;
+            self.unstagger(rise);
         }
         let on = f.shelf.is_some();
         self.button(G_SHELF, &self.fonts.icon, l.shelf_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Shelf) || on, sh)?;
         if let Some(sv) = &f.shelf {
-            self.draw_shelf(sv, l, a, sh, f.hover)?;
+            let ap = self.stagger(a, rise);
+            self.draw_shelf(sv, l, ap, sh, f.hover)?;
+            self.unstagger(rise);
         }
         let on = f.today.is_some();
         self.button(G_TODAY, &self.fonts.icon, l.today_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Today) || on, sh)?;
         if let Some(tv) = &f.today {
-            self.draw_today(tv, l, a, sh, f.hover)?;
+            let ap = self.stagger(a, rise);
+            self.draw_today(tv, l, ap, sh, f.hover)?;
+            self.unstagger(rise);
         }
         unsafe {
             self.ctx.SetTransform(&Matrix3x2::identity());
@@ -672,9 +720,9 @@ impl Renderer {
                     // Ojitos felices: "^ ^".
                     let g = self.d2d_factory.CreatePathGeometry()?;
                     let s = g.Open()?;
-                    s.BeginFigure(pt(ex - 4.0, cy + 2.0), D2D1_FIGURE_BEGIN_HOLLOW);
-                    s.AddLine(pt(ex, cy - 2.5));
-                    s.AddLine(pt(ex + 4.0, cy + 2.0));
+                    s.BeginFigure(pt(ex - 4.0, ey + 2.0), D2D1_FIGURE_BEGIN_HOLLOW);
+                    s.AddLine(pt(ex, ey - 2.5));
+                    s.AddLine(pt(ex + 4.0, ey + 2.0));
                     s.EndFigure(D2D1_FIGURE_END_OPEN);
                     s.Close()?;
                     self.ctx.DrawGeometry(&g, &closed, 2.0, &style);
@@ -734,8 +782,39 @@ impl Renderer {
         unsafe { self.d2d_factory.CreateStrokeStyle(&props, None) }
     }
 
+    /// Entrada escalonada de los paneles: aparecen después que el contenido principal.
+    fn stagger(&self, a: f32, rise: f32) -> f32 {
+        let ap = clamp01((a - 0.35) / 0.65);
+        unsafe {
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, -rise + (1.0 - ap) * 10.0));
+        }
+        ap
+    }
+
+    fn unstagger(&self, rise: f32) {
+        unsafe {
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, -rise));
+        }
+    }
+
+    /// Carátula con fundido: la anterior se desvanece mientras aparece la nueva.
     fn draw_art(&self, r: R, radius: f32, a: f32) -> Result<()> {
-        let Some(bmp) = &self.art else { return Ok(()) };
+        let t = self.art_fade();
+        if t < 1.0 {
+            if let Some(prev) = &self.prev_art {
+                self.draw_bitmap(prev, r, radius, a * (1.0 - t))?;
+            }
+        }
+        match &self.art {
+            Some(bmp) => self.draw_bitmap(bmp, r, radius, a * t.max(if self.prev_art.is_some() { 0.0 } else { t })),
+            None => Ok(()),
+        }
+    }
+
+    fn draw_bitmap(&self, bmp: &ID2D1Bitmap1, r: R, radius: f32, a: f32) -> Result<()> {
+        if a <= 0.01 {
+            return Ok(());
+        }
         unsafe {
             let size = bmp.GetSize();
             // Recorte cuadrado centrado (las miniaturas de YouTube son 16:9).

@@ -8,6 +8,7 @@ pub const SLEEP_AFTER: Duration = Duration::from_secs(180);
 const BLINK_KEYS: [f32; 4] = [0.45, 0.0, 0.5, 1.0];
 pub const BLINK_STEP_MS: u32 = 45;
 pub const GREET_LEN: Duration = Duration::from_millis(1800);
+const HOP_SECS: f32 = 0.6;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mood {
@@ -30,6 +31,8 @@ pub struct Mascot {
     pub mood: Mood,
     blink_step: Option<usize>,
     greet_until: Option<Instant>,
+    /// Inicio del saltito de saludo (dura HOP_SECS).
+    hop_start: Option<Instant>,
     seed: u32,
     gaze: (f32, f32),
 }
@@ -37,7 +40,7 @@ pub struct Mascot {
 impl Mascot {
     pub fn new() -> Self {
         let seed = std::process::id() ^ 0x9E37_79B9;
-        Self { mood: Mood::Awake, blink_step: None, greet_until: None, seed, gaze: (0.0, 0.0) }
+        Self { mood: Mood::Awake, blink_step: None, greet_until: None, hop_start: None, seed, gaze: (0.0, 0.0) }
     }
 
     /// Milisegundos hasta el próximo pestañeo (aleatorio, 4–9 s: cada pestañeo cuesta unos frames).
@@ -88,6 +91,7 @@ impl Mascot {
     pub fn greet(&mut self) {
         self.mood = Mood::Greeting;
         self.greet_until = Some(Instant::now() + GREET_LEN);
+        self.hop_start = Some(Instant::now());
     }
 
     /// Llamar cuando vence el timer del saludo.
@@ -98,12 +102,25 @@ impl Mascot {
         }
     }
 
+    /// ¿Está dando el saltito? (necesita frames mientras dura).
+    pub fn hopping(&self) -> bool {
+        self.hop_start.map(|t| t.elapsed().as_secs_f32() < HOP_SECS).unwrap_or(false)
+    }
+
     pub fn eyes(&self) -> Eyes {
         let open = match (self.mood, self.blink_step) {
             (Mood::Asleep, _) => 0.0,
             (Mood::Awake, Some(i)) => BLINK_KEYS[i],
             _ => 1.0,
         };
-        Eyes { open, mood: self.mood, gaze: if self.mood == Mood::Asleep { (0.0, 0.0) } else { self.gaze } }
+        let mut gaze = if self.mood == Mood::Asleep { (0.0, 0.0) } else { self.gaze };
+        if let Some(t) = self.hop_start {
+            // Dos saltitos que se van achicando.
+            let p = t.elapsed().as_secs_f32() / HOP_SECS;
+            if p < 1.0 {
+                gaze.1 -= (p * std::f32::consts::PI * 2.0).sin().abs() * 3.0 * (1.0 - p);
+            }
+        }
+        Eyes { open, mood: self.mood, gaze }
     }
 }

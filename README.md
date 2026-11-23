@@ -9,7 +9,7 @@ Bajá **Esme.exe** de la última versión en
 [Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
 arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 
-## Estado: v0.5 — Fases 1, 2, 3 y 5 completas, Fase 4 casi completa
+## Estado: v0.6 — Fases 1, 2, 3 y 5 completas, Fase 4 casi completa
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -47,6 +47,12 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 - **Calendario** de Google (solo lectura): copiá la "Dirección secreta en formato iCal" de tu
   calendario y elegí bandeja → Configuración → Calendario → Pegar URL iCal copiada. Muestra los
   próximos eventos (incluye repeticiones diarias, semanales, mensuales y anuales).
+
+**Animaciones** (cortas y solo cuando pasa algo; en reposo no corre ninguna)
+- Saludo al iniciar según la hora y mascota saludando con un saltito.
+- Borde de luz azul → color de los ojos de la mascota al expandir; barras con ese mismo color.
+- Fundido de carátula al cambiar de canción, barra de volumen que se desliza y entrada escalonada
+  de los paneles.
 
 **Modo juego / pantalla completa**
 - Si en el monitor principal hay un juego o un video a pantalla completa, el notch se pasa al otro

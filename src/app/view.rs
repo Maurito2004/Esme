@@ -87,7 +87,7 @@ impl App {
             self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
         let pomo_text = self.pomo.text();
         let collapsed = if let Some(o) = &self.overlay {
-            Collapsed::Overlay { glyph: o.glyph, text: &o.text, level: o.level }
+            Collapsed::Overlay { glyph: o.glyph, text: &o.text, level: o.level.map(|_| self.level.value) }
         } else if let Some(t) = &self.toast {
             Collapsed::Lyric(t)
         } else if self.pomo_pill() {
@@ -156,6 +156,11 @@ impl App {
             layout: self.layout_now(),
             hover: self.hover_btn,
             mascot_vis: self.mascot_vis.value,
+            accent: match self.cfg.pet() {
+                Some(config::Pet::Esme) => (1.0, 0.72, 0.32),
+                Some(config::Pet::Gato) => (0.92, 0.94, 1.0),
+                None => (0.55, 0.72, 1.0),
+            },
             clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
             shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
             today: if self.today_on {
