@@ -24,10 +24,15 @@ fn post(hwnd: isize, kind: usize, value: isize) {
     }
 }
 
-#[implement(IAudioEndpointVolumeCallback)]
+// Ágil (IAgileObject): Windows llama directo desde su hilo, sin esperar al hilo de la UI de
+// Esme. Sin esto, cambiar el volumen podía colgar al Explorador mientras Esme estaba ocupado.
+#[implement(IAudioEndpointVolumeCallback, windows::Win32::System::Com::IAgileObject)]
 struct VolumeCb {
     hwnd: isize,
 }
+
+impl windows::Win32::System::Com::IAgileObject_Impl for VolumeCb_Impl {}
+impl windows::Win32::System::Com::IAgileObject_Impl for DeviceCb_Impl {}
 
 impl IAudioEndpointVolumeCallback_Impl for VolumeCb_Impl {
     fn OnNotify(&self, data: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
@@ -40,7 +45,7 @@ impl IAudioEndpointVolumeCallback_Impl for VolumeCb_Impl {
     }
 }
 
-#[implement(IMMNotificationClient)]
+#[implement(IMMNotificationClient, windows::Win32::System::Com::IAgileObject)]
 struct DeviceCb {
     hwnd: isize,
 }
