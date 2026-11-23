@@ -25,6 +25,8 @@ pub struct Eyes {
     pub mood: Mood,
     /// Hacia dónde miran (desplazamiento en DIPs, ±1,8).
     pub gaze: (f32, f32),
+    /// Tamaño de los ojos (1 = normal; >1 durante el "¡oh!").
+    pub scale: f32,
 }
 
 pub struct Mascot {
@@ -121,6 +123,6 @@ impl Mascot {
                 gaze.1 -= (p * std::f32::consts::PI * 2.0).sin().abs() * 3.0 * (1.0 - p);
             }
         }
-        Eyes { open, mood: self.mood, gaze }
+        Eyes { open, mood: self.mood, gaze, scale: 1.0 }
     }
 }

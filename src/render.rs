@@ -137,6 +137,8 @@ pub struct Renderer {
     /// Carátula anterior, para el fundido al cambiar de canción.
     prev_art: Option<ID2D1Bitmap1>,
     art_changed: Option<std::time::Instant>,
+    /// Color predominante de la carátula actual (para el aura del borde).
+    art_color: Option<(f32, f32, f32)>,
     art_bytes: Option<std::sync::Arc<Vec<u8>>>,
     width_px: u32,
     height_px: u32,
@@ -235,6 +237,7 @@ impl Renderer {
                 art_bytes: None,
                 prev_art: None,
                 art_changed: None,
+                art_color: None,
                 width_px,
                 height_px,
                 scale,
@@ -286,6 +289,7 @@ impl Renderer {
             return;
         }
         self.prev_art = self.art.take();
+        self.art_color = bytes.as_ref().and_then(|b| self.dominant_color(b));
         self.art = bytes.as_ref().and_then(|b| self.decode(b).ok());
         self.art_bytes = bytes;
         self.art_changed = Some(std::time::Instant::now());
@@ -299,6 +303,45 @@ impl Renderer {
     /// ¿Hay una animación propia del renderer en curso? (fundido de carátula)
     pub fn animating(&self) -> bool {
         self.art_fade() < 1.0 && (self.prev_art.is_some() || self.art.is_some())
+    }
+
+    pub fn art_color(&self) -> Option<(f32, f32, f32)> {
+        self.art_color
+    }
+
+    /// Color "vivo" predominante: promedio de una miniatura de 12x12 pesado por saturación,
+    /// con un mínimo de brillo para que el borde siempre se vea sobre negro.
+    fn dominant_color(&self, bytes: &[u8]) -> Option<(f32, f32, f32)> {
+        let wic = self.wic.as_ref()?;
+        unsafe {
+            let stream = wic.CreateStream().ok()?;
+            stream.InitializeFromMemory(bytes).ok()?;
+            let dec = wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand).ok()?;
+            let frame = dec.GetFrame(0).ok()?;
+            let scaler = wic.CreateBitmapScaler().ok()?;
+            scaler.Initialize(&frame, 12, 12, WICBitmapInterpolationModeFant).ok()?;
+            let conv = wic.CreateFormatConverter().ok()?;
+            conv.Initialize(&scaler, &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
+            let mut px = vec![0u8; 12 * 12 * 4];
+            conv.CopyPixels(std::ptr::null(), 12 * 4, &mut px).ok()?;
+            let (mut r, mut g, mut b, mut wsum) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for p in px.chunks_exact(4) {
+                let (pb, pg, pr) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0);
+                let mx = pr.max(pg).max(pb);
+                let mn = pr.min(pg).min(pb);
+                let sat = if mx > 0.0 { (mx - mn) / mx } else { 0.0 };
+                let w = 0.05 + sat * sat * mx; // los colores vivos y claros pesan más
+                r += pr * w;
+                g += pg * w;
+                b += pb * w;
+                wsum += w;
+            }
+            let (r, g, b) = (r / wsum, g / wsum, b / wsum);
+            // Normalizamos el brillo: el canal más alto queda en ~0,95.
+            let mx = r.max(g).max(b).max(0.05);
+            let k = 0.95 / mx;
+            Some(((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)))
+        }
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<ID2D1Bitmap1> {
@@ -733,12 +776,12 @@ impl Renderer {
                 },
                 _ if pet == Pet::Gato => unsafe {
                     // Ojitos originales: píldoras blancas que se achican al pestañear.
-                    let hh = (4.5 * eyes.open).max(0.9);
+                    let hh = (4.5 * eyes.open * eyes.scale).max(0.9);
                     let rr = D2D1_ROUNDED_RECT { rect: rect(ex - 3.0, ey - hh, ex + 3.0, ey + hh), radiusX: 3.0, radiusY: hh.min(3.0) };
                     self.ctx.FillRoundedRectangle(&rr, &iris);
                 },
                 _ => unsafe {
-                    let (rx, ry) = (3.6, 6.0);
+                    let (rx, ry) = (3.6 * eyes.scale, 6.0 * eyes.scale);
                     let hh = (ry * eyes.open).max(0.9);
                     for k in [2.6f32, 1.3] {
                         let g = D2D1_ELLIPSE { point: pt(ex, ey), radiusX: rx + k, radiusY: hh + k };

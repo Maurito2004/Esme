@@ -195,6 +195,10 @@ struct App {
     overlay: Option<SysOverlay>,
     /// Nivel animado de la barra del overlay (el volumen se desliza al valor nuevo).
     level: Spring,
+    /// "¡Oh!" de los ojos: se agrandan un instante y vuelven con un rebotito.
+    eye_pop: Spring,
+    /// Aura del borde (R, G, B): va suave (sobreamortiguado) hacia el color de la carátula.
+    aura: [Spring; 3],
     /// Al terminar el saludo de bienvenida, la mascota saluda con un saltito.
     greet_after_toast: bool,
     audio: Option<system::Audio>,
@@ -271,7 +275,8 @@ fn main() -> Result<()> {
             sw: Spring::new(start.w, 380.0, 0.28).with_eps(0.05),
             sh: Spring::new(start.h, 380.0, 0.28).with_eps(0.05),
             expand: Spring::new(0.0, 380.0, 0.28),
-            mascot_vis: Spring::new(0.0, 200.0, 0.1).with_eps(0.002),
+            // La mascota aparece con un rebote notorio.
+            mascot_vis: Spring::new(0.0, 230.0, 0.38).with_eps(0.002),
             lyric_scroll: Spring::new(0.0, 220.0, 0.0).with_eps(0.002),
             cfg,
             last_tick: 0,
@@ -319,6 +324,12 @@ fn main() -> Result<()> {
             inbox: Arc::new(Mutex::new(DataInbox::default())),
             overlay: None,
             level: Spring::new(0.0, 320.0, 0.05).with_eps(0.002),
+            eye_pop: Spring::new(1.0, 260.0, 0.45).with_eps(0.002),
+            aura: [
+                Spring::new(1.0, 60.0, -0.4).with_eps(0.003),
+                Spring::new(0.72, 60.0, -0.4).with_eps(0.003),
+                Spring::new(0.32, 60.0, -0.4).with_eps(0.003),
+            ],
             greet_after_toast: false,
             audio: None,
             shell_msg: 0,

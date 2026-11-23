@@ -92,7 +92,9 @@ impl App {
             && self.expand.is_settled()
             && self.mascot_vis.is_settled()
             && self.lyric_scroll.is_settled()
-            && self.level.is_settled())
+            && self.level.is_settled()
+            && self.eye_pop.is_settled()
+            && self.aura.iter().all(|s| s.is_settled()))
             || self.mascot.hopping()
             || self.renderer.as_ref().map(|r| r.animating()).unwrap_or(false)
     }
@@ -108,8 +110,38 @@ impl App {
     }
 
     /// Recalcula a dónde tiene que ir cada animación según el estado actual.
+    /// Color del acento: el de la carátula si hay música, si no el de los ojos de la mascota.
+    pub(crate) fn accent_target(&self) -> (f32, f32, f32) {
+        if self.has_media() {
+            if let Some(c) = self.renderer.as_ref().and_then(|r| r.art_color()) {
+                return c;
+            }
+        }
+        match self.cfg.pet() {
+            Some(config::Pet::Esme) => (1.0, 0.72, 0.32),
+            Some(config::Pet::Gato) => (0.92, 0.94, 1.0),
+            None => (0.55, 0.72, 1.0),
+        }
+    }
+
+    /// "¡Oh!": los ojos se agrandan un instante (al pasar el mouse o al volver de un aviso).
+    pub(crate) fn pop_eyes(&mut self) {
+        if self.mascot_shown() {
+            if self.is_animating() {
+                self.eye_pop.value = 1.16;
+            } else {
+                self.eye_pop.value = 1.16;
+                self.last_tick = self.now();
+            }
+        }
+    }
+
     pub(crate) fn retarget(&mut self) {
         let was = self.is_animating();
+        let c = self.accent_target();
+        for (s, v) in self.aura.iter_mut().zip([c.0, c.1, c.2]) {
+            s.set_target(v);
+        }
         let open = self.want_expanded();
         let shape = if open && !self.cfg.transparente { self.expanded_dims() } else { self.collapsed_dims() };
         if (self.expand.target > 0.5) != open {
@@ -129,7 +161,10 @@ impl App {
         let now = self.now();
         let dt = (((now - self.last_tick) as f64 / self.qpf as f64) as f32).clamp(0.0, 1.0 / 20.0);
         self.last_tick = now;
-        for s in [&mut self.sw, &mut self.sh, &mut self.expand, &mut self.mascot_vis, &mut self.lyric_scroll, &mut self.level] {
+        for s in [&mut self.sw, &mut self.sh, &mut self.expand, &mut self.mascot_vis, &mut self.lyric_scroll, &mut self.level, &mut self.eye_pop] {
+            s.step(dt);
+        }
+        for s in self.aura.iter_mut() {
             s.step(dt);
         }
         self.redraw_with(true);

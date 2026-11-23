@@ -80,7 +80,8 @@ impl App {
         self.update_region(w, h, ear);
 
         let line = self.current_line_text();
-        let eyes = self.mascot.eyes();
+        let mut eyes = self.mascot.eyes();
+        eyes.scale = self.eye_pop.value;
         let (wglyph, wtext) = self.weather_line();
         let events = self.event_lines();
         let tiles: Vec<(&'static str, String)> =
@@ -156,11 +157,7 @@ impl App {
             layout: self.layout_now(),
             hover: self.hover_btn,
             mascot_vis: self.mascot_vis.value,
-            accent: match self.cfg.pet() {
-                Some(config::Pet::Esme) => (1.0, 0.72, 0.32),
-                Some(config::Pet::Gato) => (0.92, 0.94, 1.0),
-                None => (0.55, 0.72, 1.0),
-            },
+            accent: (self.aura[0].value, self.aura[1].value, self.aura[2].value),
             clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
             shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
             today: if self.today_on {

@@ -51,6 +51,8 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 **Animaciones** (cortas y solo cuando pasa algo; en reposo no corre ninguna)
 - Saludo al iniciar según la hora y mascota saludando con un saltito.
 - Borde de luz azul → color de los ojos de la mascota al expandir; barras con ese mismo color.
+- Con música, el borde toma el color predominante de la carátula (cambia suave entre canciones).
+- Los ojos de la mascota hacen "¡oh!" (se agrandan un instante) al pasar el mouse o al volver de un aviso.
 - Fundido de carátula al cambiar de canción, barra de volumen que se desliza y entrada escalonada
   de los paneles.
 

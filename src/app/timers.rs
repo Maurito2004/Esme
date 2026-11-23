@@ -131,6 +131,7 @@ impl App {
             T_OVERLAY => {
                 self.overlay = None;
                 self.retarget();
+                self.pop_eyes();
                 self.refresh();
             }
             T_TOAST => {
