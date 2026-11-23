@@ -54,7 +54,33 @@ impl App {
         use windows::Win32::System::Power::{GetSystemPowerStatus, POWERBROADCAST_SETTING, SYSTEM_POWER_STATUS};
         unsafe {
             let s = &*(lp.0 as *const POWERBROADCAST_SETTING);
-            if s.PowerSetting != windows::Win32::System::SystemServices::GUID_ACDC_POWER_SOURCE || s.DataLength < 4 {
+            if s.DataLength < 4 {
+                return;
+            }
+            use windows::Win32::System::SystemServices::{GUID_BATTERY_PERCENTAGE_REMAINING, GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS};
+            let value = *(s.Data.as_ptr() as *const u32);
+            if s.PowerSetting == GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS {
+                // Brillo (notebooks): ícono de sol y barra.
+                let prev = self.last_brightness.replace(value);
+                if prev.is_some() && prev != Some(value) {
+                    self.show_overlay("\u{E706}", format!("{}", value.min(100)), Some(value.min(100) as f32 / 100.0));
+                }
+                return;
+            }
+            if s.PowerSetting == GUID_BATTERY_PERCENTAGE_REMAINING {
+                // Batería baja: aviso al bajar de 20 % y de 10 % (solo sin cargador).
+                let prev = self.last_battery.replace(value);
+                let on_battery = self.last_ac.map(|a| a != 0).unwrap_or(false);
+                if let Some(p) = prev {
+                    for limit in [20u32, 10] {
+                        if on_battery && p > limit && value <= limit {
+                            self.show_overlay("\u{E850}", format!("Batería baja · {value}%"), None);
+                        }
+                    }
+                }
+                return;
+            }
+            if s.PowerSetting != windows::Win32::System::SystemServices::GUID_ACDC_POWER_SOURCE {
                 return;
             }
             let src = *(s.Data.as_ptr() as *const u32);

@@ -34,8 +34,8 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 - Cambio de salida de audio, por ejemplo al conectar auriculares Bluetooth (muestra el nombre).
 - Cambio de idioma/distribución del teclado (shell hook).
 - Cargador conectado/desconectado con porcentaje (solo en equipos con batería).
-- Pendiente: brillo (laptops) y estado de Wi-Fi. (Sin aviso de Bloq Mayús: requería leer el
-  teclado de todo el sistema y Esme no lo hace.)
+- **Notebooks**: brillo de la pantalla (barra) y aviso de batería baja al bajar de 20 % y 10 %.
+- Sin aviso de Bloq Mayús: requería leer el teclado de todo el sistema y Esme no lo hace.
 
 **Fase 5 — panel "Hoy"** (botón 📅 en el panel expandido)
 - **Pomodoro** 25/5: play/pausa y reinicio; mientras corre, la píldora contraída muestra la cuenta
@@ -99,7 +99,9 @@ Cada tag `vX.Y.Z` que se sube compila Esme en GitHub Actions y publica el Releas
 (`.github/workflows/release.yml`; notas en `docs/release-notes/`).
 
 
-Requisitos: Rust (`x86_64-pc-windows-msvc`) y VS 2022 Build Tools con C++.
+Funciona en Windows 10 (1903+) y Windows 11, de escritorio y notebooks.
+
+Requisitos para compilar: Rust (`x86_64-pc-windows-msvc`) y VS 2022 Build Tools con C++.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-res.ps1   # solo si cambiás res\

@@ -198,7 +198,7 @@ impl Renderer {
 
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let icons = if font_exists(&dw, "Segoe Fluent Icons") { "Segoe Fluent Icons" } else { "Segoe MDL2 Assets" };
-            let ui_font = "Segoe UI Variable Display";
+            let ui_font = if font_exists(&dw, "Segoe UI Variable Display") { "Segoe UI Variable Display" } else { "Segoe UI" };
             let c = DWRITE_TEXT_ALIGNMENT_CENTER;
             let l = DWRITE_TEXT_ALIGNMENT_LEADING;
             let fonts = Fonts {

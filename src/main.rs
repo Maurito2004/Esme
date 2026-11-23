@@ -204,6 +204,10 @@ struct App {
     audio: Option<system::Audio>,
     shell_msg: u32,
     last_ac: Option<u32>,
+    /// Último brillo informado (el primer aviso es el estado inicial y no se muestra).
+    last_brightness: Option<u32>,
+    /// Último porcentaje de batería (para avisar al cruzar 20 % y 10 %).
+    last_battery: Option<u32>,
     // Mascota.
     mascot: Mascot,
     /// Última mascota elegida (para el fundido al desactivarla).
@@ -334,6 +338,8 @@ fn main() -> Result<()> {
             audio: None,
             shell_msg: 0,
             last_ac: None,
+            last_brightness: None,
+            last_battery: None,
             mascot: Mascot::new(),
             last_pet: config::Pet::Esme,
             blink_timer: false,
@@ -382,6 +388,13 @@ fn main() -> Result<()> {
             &windows::Win32::System::SystemServices::GUID_ACDC_POWER_SOURCE,
             DEVICE_NOTIFY_WINDOW_HANDLE,
         );
+        // Notebooks: brillo de la pantalla y porcentaje de batería (también son avisos de Windows).
+        for guid in [
+            windows::Win32::System::SystemServices::GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
+            windows::Win32::System::SystemServices::GUID_BATTERY_PERCENTAGE_REMAINING,
+        ] {
+            let _ = windows::Win32::System::Power::RegisterPowerSettingNotification(HANDLE(hwnd.0), &guid, DEVICE_NOTIFY_WINDOW_HANDLE);
+        }
         // Clima y calendario: primera carga ahora y después cada una hora.
         with_app(|a| {
             a.refresh_data();
