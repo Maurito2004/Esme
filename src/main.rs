@@ -10,6 +10,8 @@ extern "C" {}
 
 mod anim;
 mod clipboard;
+mod ocr;
+mod shelf;
 mod config;
 mod fullscreen;
 mod http;
@@ -25,7 +27,7 @@ use config::Config;
 use lyrics::Lyrics;
 use mascot::{Mascot, Mood};
 use media::{Cmd, MediaInfo};
-use render::{ClipView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
+use render::{ClipView, ShelfView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
 use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -34,7 +36,7 @@ use ui::{Btn, Dims, Layout, CANVAS_H, CANVAS_W};
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Ole::{OleInitialize, RegisterDragDrop};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
@@ -64,6 +66,9 @@ const T_HOVERCHECK: usize = 11;
 const T_FS: usize = 12;
 const T_COPIED: usize = 13;
 const WM_CLIPBOARDUPDATE: u32 = 0x031D;
+const T_TOAST: usize = 14;
+const T_DROPCLOSE: usize = 15;
+const HOTKEY_OCR: i32 = 1;
 const WM_APPBAR: u32 = WM_APP + 4;
 const ABN_FULLSCREENAPP: usize = 2;
 
@@ -136,6 +141,17 @@ struct App {
     clip: clipboard::History,
     clip_on: bool,
     clip_copied: Option<usize>,
+    // Estante de archivos.
+    shelf: shelf::Shelf,
+    shelf_on: bool,
+    /// Hay archivos arrastrándose sobre el notch (o recién soltados).
+    drop_open: bool,
+    drop_hover: bool,
+    /// Ítem del estante presionado: (índice, x, y) para detectar el arrastre hacia afuera.
+    press: Option<(usize, f32, f32)>,
+    _drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
+    // Aviso temporal en la píldora (ej. "Texto copiado").
+    toast: Option<String>,
     // Mascota.
     mascot: Mascot,
     /// Última mascota elegida (para el fundido al desactivarla).
@@ -164,7 +180,8 @@ fn main() -> Result<()> {
             return Ok(());
         }
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // OLE (STA): drag & drop del estante, WIC para las carátulas.
+        let _ = OleInitialize(None);
 
         let hinst = GetModuleHandleW(None)?;
         let class = w!("EsmeNotch");
@@ -237,6 +254,13 @@ fn main() -> Result<()> {
             clip: clipboard::History::load(),
             clip_on: false,
             clip_copied: None,
+            shelf: shelf::Shelf::load(),
+            shelf_on: false,
+            drop_open: false,
+            drop_hover: false,
+            press: None,
+            _drop_target: None,
+            toast: None,
             mascot: Mascot::new(),
             last_pet: config::Pet::Esme,
             blink_timer: false,
@@ -268,6 +292,12 @@ fn main() -> Result<()> {
         windows::Win32::UI::Shell::SHAppBarMessage(windows::Win32::UI::Shell::ABM_NEW, &mut abd);
         with_app(|a| a.check_fullscreen());
         let _ = windows::Win32::System::DataExchange::AddClipboardFormatListener(hwnd);
+        // Estante: el notch acepta archivos arrastrados. OCR: atajo global Ctrl+Alt+T.
+        let target = shelf::DropTarget::new(hwnd);
+        let _ = RegisterDragDrop(hwnd, &target);
+        with_app(|a| a._drop_target = Some(target));
+        use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT};
+        let _ = RegisterHotKey(Some(hwnd), HOTKEY_OCR, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32);
 
         run_loop();
         APP.with(|a| a.borrow_mut().take());
@@ -322,7 +352,7 @@ impl App {
     }
 
     fn want_expanded(&self) -> bool {
-        self.hover || self.pinned
+        self.hover || self.pinned || self.drop_open
     }
 
     fn lyric_pill(&self) -> bool {
@@ -330,11 +360,11 @@ impl App {
     }
 
     fn mascot_shown(&self) -> bool {
-        self.cfg.pet().is_some() && !self.cfg.notch_minimo && !self.lyric_pill() && !self.playing()
+        self.toast.is_none() && self.cfg.pet().is_some() && !self.cfg.notch_minimo && !self.lyric_pill() && !self.playing()
     }
 
     fn collapsed_dims(&self) -> Dims {
-        if self.lyric_pill() {
+        if self.lyric_pill() || self.toast.is_some() {
             ui::PILL_LYRIC
         } else if self.cfg.notch_minimo {
             ui::MINIMAL
@@ -350,6 +380,10 @@ impl App {
         if self.clip_on {
             d.h += ui::clip_extra(self.clip.items.len());
             d.w = d.w.max(360.0);
+        }
+        if self.shelf_on {
+            d.h += ui::shelf_extra(self.shelf.items.len());
+            d.w = d.w.max(400.0);
         }
         d
     }
@@ -374,7 +408,7 @@ impl App {
     }
 
     fn layout_now(&self) -> Layout {
-        Layout::new(CANVAS_W / 2.0, self.content_top(), self.expanded_dims(), self.has_media(), self.lyrics_on, self.clip_on)
+        Layout::new(CANVAS_W / 2.0, self.content_top(), self.expanded_dims(), self.has_media(), self.lyrics_on, self.clip_on, self.shelf_on)
     }
 
     fn is_animating(&self) -> bool {
@@ -505,7 +539,11 @@ impl App {
 
         let line = self.current_line_text();
         let eyes = self.mascot.eyes();
-        let collapsed = if self.lyric_pill() {
+        let tiles: Vec<(&'static str, String)> =
+            self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
+        let collapsed = if let Some(t) = &self.toast {
+            Collapsed::Lyric(t)
+        } else if self.lyric_pill() {
             Collapsed::Lyric(&line)
         } else if self.cfg.notch_minimo {
             Collapsed::Minimal
@@ -567,6 +605,7 @@ impl App {
             hover: self.hover_btn,
             mascot_vis: self.mascot_vis.value,
             clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
+            shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
         };
         let ok = match self.renderer.as_mut() {
             Some(r) => r.draw(&frame, vsync).is_ok(),
@@ -771,6 +810,15 @@ impl App {
             }
             T_IDLE => self.check_idle(),
             T_FS => self.check_fullscreen(),
+            T_TOAST => {
+                self.toast = None;
+                self.retarget();
+                self.refresh();
+            }
+            T_DROPCLOSE => {
+                self.drop_open = false;
+                self.retarget();
+            }
             T_COPIED => {
                 self.clip_copied = None;
                 self.refresh();
@@ -975,7 +1023,7 @@ impl App {
                 Some(Lyrics::Synced(v)) => v.len(),
                 _ => 0,
             };
-            self.layout_now().hit(x, y, self.lyric_scroll.value, n, self.clip_on_count())
+            self.layout_now().hit(x, y, self.lyric_scroll.value, n, self.clip_on_count(), self.shelf_on_count())
         } else {
             None
         };
@@ -994,6 +1042,91 @@ impl App {
             let _ = KillTimer(Some(self.hwnd), T_HOVERCHECK);
             let _ = KillTimer(Some(self.hwnd), T_EXPAND);
             SetTimer(Some(self.hwnd), T_COLLAPSE, COLLAPSE_DELAY_MS, None);
+        }
+    }
+
+    fn shelf_on_count(&self) -> usize {
+        if self.shelf_on { self.shelf.items.len() } else { 0 }
+    }
+
+    // ---------- Estante: arrastrar y soltar ----------
+
+    fn on_shelf_drag(&mut self, entering: bool) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_DROPCLOSE);
+        }
+        self.drop_hover = entering;
+        self.drop_open = entering;
+        if entering {
+            self.shelf_on = true;
+            self.lyrics_on = false;
+            self.clip_on = false;
+        }
+        self.retarget();
+        self.refresh();
+    }
+
+    fn on_shelf_drop(&mut self) {
+        let paths = shelf::take_dropped();
+        self.drop_hover = false;
+        if !paths.is_empty() {
+            self.shelf.add(paths);
+        }
+        // Lo dejamos abierto un momento para ver lo que se guardó.
+        self.drop_open = true;
+        unsafe {
+            SetTimer(Some(self.hwnd), T_DROPCLOSE, 1600, None);
+        }
+        self.retarget();
+        self.refresh();
+    }
+
+    /// Botón presionado sobre un archivo del estante: preparamos un posible arrastre.
+    fn on_mouse_down(&mut self, lp: LPARAM) {
+        self.press = None;
+        if self.expand.value < 0.6 {
+            return;
+        }
+        let (x, y) = self.to_dips(lp);
+        if let Some(Btn::ShelfItem(i)) = self.layout_now().hit(x, y, 0.0, 0, 0, self.shelf_on_count()) {
+            self.press = Some((i, x, y));
+        }
+    }
+
+    /// Si el mouse se movió con el botón apretado sobre un archivo, devuelve la ruta a arrastrar.
+    fn drag_candidate(&mut self, wp: WPARAM, lp: LPARAM) -> Option<String> {
+        let (i, px, py) = self.press?;
+        if wp.0 & 0x0001 == 0 {
+            self.press = None;
+            return None;
+        }
+        let (x, y) = self.to_dips(lp);
+        if (x - px).abs() + (y - py).abs() < 6.0 {
+            return None;
+        }
+        self.press = None;
+        self.shelf.items.get(i).cloned()
+    }
+
+    fn show_toast(&mut self, text: String, ms: u32) {
+        self.toast = Some(text);
+        unsafe {
+            SetTimer(Some(self.hwnd), T_TOAST, ms, None);
+        }
+        self.retarget();
+        self.refresh();
+    }
+
+    fn on_ocr_done(&mut self) {
+        match ocr::take_result() {
+            Some(Ok(text)) => {
+                let ok = clipboard::set_text(self.hwnd, &text);
+                let preview: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).take(60).collect();
+                let msg = if ok { format!("✓ Copiado: {preview}") } else { "No pude copiar al portapapeles".into() };
+                self.show_toast(msg, 2600);
+            }
+            Some(Err(e)) => self.show_toast(e, 3200),
+            None => {}
         }
     }
 
@@ -1036,7 +1169,7 @@ impl App {
             _ => 0,
         };
         let layout = self.layout_now();
-        let Some(btn) = layout.hit(x, y, self.lyric_scroll.value, n, self.clip_on_count()) else { return };
+        let Some(btn) = layout.hit(x, y, self.lyric_scroll.value, n, self.clip_on_count(), self.shelf_on_count()) else { return };
         match btn {
             Btn::Play => {
                 let _ = self.media_tx.send(Cmd::PlayPause);
@@ -1051,8 +1184,25 @@ impl App {
                 self.clip_on = !self.clip_on;
                 if self.clip_on {
                     self.lyrics_on = false;
+                    self.shelf_on = false;
                 }
                 self.retarget();
+            }
+            Btn::Shelf => {
+                self.shelf_on = !self.shelf_on;
+                if self.shelf_on {
+                    self.lyrics_on = false;
+                    self.clip_on = false;
+                }
+                self.retarget();
+            }
+            Btn::ShelfItem(i) => {
+                // Clic: abrir con la app predeterminada.
+                if let Some(p) = self.shelf.items.get(i) {
+                    unsafe {
+                        ShellExecuteW(None, w!("open"), &HSTRING::from(p.as_str()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+                    }
+                }
             }
             Btn::ClipItem(i) => {
                 if let Some(text) = self.clip.items.get(i).cloned() {
@@ -1067,6 +1217,7 @@ impl App {
                 self.lyrics_on = !self.lyrics_on;
                 if self.lyrics_on {
                     self.clip_on = false;
+                    self.shelf_on = false;
                 }
                 if self.lyrics_on && self.lyrics.is_none() {
                     self.fetch_lyrics();
@@ -1140,6 +1291,7 @@ impl App {
                 let _ = self.cfg.save();
                 self.check_fullscreen();
             }
+            CMD_OCR => ocr::start(self.hwnd),
             CMD_AJUSTES => unsafe {
                 let _ = self.cfg.save();
                 let path = HSTRING::from(config::config_path().as_os_str());
@@ -1157,7 +1309,49 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     unsafe {
         match msg {
             WM_MOUSEMOVE => {
-                with_app(|a| a.on_mouse_move(lp));
+                let drag = with_app(|a| {
+                    a.on_mouse_move(lp);
+                    a.drag_candidate(wp, lp)
+                })
+                .flatten();
+                // DoDragDrop tiene su propio bucle de mensajes: lo llamamos sin tener el estado prestado.
+                if let Some(path) = drag {
+                    shelf::drag_out(&path);
+                }
+                LRESULT(0)
+            }
+            WM_LBUTTONDOWN => {
+                with_app(|a| a.on_mouse_down(lp));
+                LRESULT(0)
+            }
+            WM_RBUTTONUP => {
+                // Clic derecho sobre un archivo del estante: lo quita.
+                with_app(|a| {
+                    let (x, y) = a.to_dips(lp);
+                    if let Some(Btn::ShelfItem(i)) = a.layout_now().hit(x, y, 0.0, 0, 0, a.shelf_on_count()) {
+                        a.shelf.remove(i);
+                        a.retarget();
+                        a.refresh();
+                    }
+                });
+                LRESULT(0)
+            }
+            WM_HOTKEY => {
+                if wp.0 as i32 == HOTKEY_OCR {
+                    ocr::start(hwnd);
+                }
+                LRESULT(0)
+            }
+            shelf::WM_SHELF_DRAG => {
+                with_app(|a| a.on_shelf_drag(wp.0 == 1));
+                LRESULT(0)
+            }
+            shelf::WM_SHELF_DROP => {
+                with_app(|a| a.on_shelf_drop());
+                LRESULT(0)
+            }
+            ocr::WM_OCR_DONE => {
+                with_app(|a| a.on_ocr_done());
                 LRESULT(0)
             }
             WM_MOUSELEAVE => {
@@ -1165,7 +1359,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                with_app(|a| a.on_click(lp));
+                with_app(|a| {
+                    // Si hubo arrastre, `press` ya se limpió y no es un clic.
+                    let pressed = a.press.take();
+                    if pressed.is_some() || a.layout_now().hit(a.to_dips(lp).0, a.to_dips(lp).1, 0.0, 0, 0, a.shelf_on_count()).map(|b| !matches!(b, Btn::ShelfItem(_))).unwrap_or(true) {
+                        a.on_click(lp);
+                    }
+                });
                 LRESULT(0)
             }
             WM_MOUSEWHEEL => {

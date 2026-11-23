@@ -23,6 +23,15 @@ pub const LYRICS_EXTRA: f32 = 162.0;
 pub const LYRICS_MSG_EXTRA: f32 = 40.0;
 pub const LYRIC_LINE_H: f32 = 30.0;
 
+pub const SHELF_TILE_W: f32 = 72.0;
+pub const SHELF_TILE_H: f32 = 66.0;
+pub const SHELF_COLS: usize = 5;
+
+/// Alto extra del estante según cuántos archivos hay.
+pub fn shelf_extra(n: usize) -> f32 {
+    if n == 0 { 64.0 } else { n.div_ceil(SHELF_COLS) as f32 * SHELF_TILE_H + 14.0 }
+}
+
 pub const CLIP_ROW_H: f32 = 26.0;
 pub const CLIP_ROWS: usize = 5;
 
@@ -44,6 +53,8 @@ pub enum Btn {
     LyricLine(usize),
     Clip,
     ClipItem(usize),
+    Shelf,
+    ShelfItem(usize),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -88,10 +99,12 @@ pub struct Layout {
     pub date: R,
     pub clip_btn: R,
     pub clip: R,
+    pub shelf_btn: R,
+    pub shelf: R,
 }
 
 impl Layout {
-    pub fn new(cx: f32, top: f32, d: Dims, media: bool, lyrics: bool, clip: bool) -> Self {
+    pub fn new(cx: f32, top: f32, d: Dims, media: bool, lyrics: bool, clip: bool, shelf: bool) -> Self {
         // El área de letras ocupa lo que sobre debajo de los controles.
         let x0 = cx - d.w / 2.0;
         let x1 = cx + d.w / 2.0;
@@ -110,8 +123,12 @@ impl Layout {
             l.next = btn(c + 44.0);
             l.lyrics_btn = btn(x1 - 34.0);
             l.clip_btn = btn(x1 - 72.0);
+            l.shelf_btn = btn(x1 - 110.0);
             if clip {
                 l.clip = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+            }
+            if shelf {
+                l.shelf = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
             }
             let ty = y0 + 100.0;
             l.t_left = R::new(x0 + 12.0, ty - 9.0, x0 + 56.0, ty + 9.0);
@@ -124,16 +141,37 @@ impl Layout {
             l.clock = R::new(x0, y0 + 10.0, x1, y0 + 58.0);
             l.date = R::new(x0, y0 + 58.0, x1, y0 + 78.0);
             l.clip_btn = R::new(x1 - 46.0, y0 + 30.0, x1 - 12.0, y0 + 58.0);
+            l.shelf_btn = R::new(x0 + 12.0, y0 + 30.0, x0 + 46.0, y0 + 58.0);
             if clip {
                 l.clip = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+            }
+            if shelf {
+                l.shelf = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
             }
         }
         l
     }
 
     /// Qué control hay bajo el punto (x, y). `lyric_scroll` = índice (float) centrado.
-    pub fn hit(&self, x: f32, y: f32, lyric_scroll: f32, n_lines: usize, clip_n: usize) -> Option<Btn> {
+    /// Rectángulo del archivo `i` del estante (centrado, hasta SHELF_COLS por fila).
+    pub fn shelf_tile(&self, i: usize, n: usize) -> R {
+        let cols = n.clamp(1, SHELF_COLS);
+        let row_w = cols as f32 * SHELF_TILE_W;
+        let x = (self.shelf.l + self.shelf.r) / 2.0 - row_w / 2.0 + (i % SHELF_COLS) as f32 * SHELF_TILE_W;
+        let y = self.shelf.t + 6.0 + (i / SHELF_COLS) as f32 * SHELF_TILE_H;
+        R::new(x + 2.0, y, x + SHELF_TILE_W - 2.0, y + SHELF_TILE_H - 4.0)
+    }
+
+    pub fn hit(&self, x: f32, y: f32, lyric_scroll: f32, n_lines: usize, clip_n: usize, shelf_n: usize) -> Option<Btn> {
         let pad = 4.0;
+        if self.shelf_btn.inflate(pad).contains(x, y) {
+            return Some(Btn::Shelf);
+        }
+        for i in 0..shelf_n {
+            if self.shelf_tile(i, shelf_n).contains(x, y) {
+                return Some(Btn::ShelfItem(i));
+            }
+        }
         if self.clip_btn.inflate(pad).contains(x, y) {
             return Some(Btn::Clip);
         }

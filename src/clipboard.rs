@@ -24,7 +24,7 @@ fn path() -> std::path::PathBuf {
 
 impl History {
     pub fn load() -> Self {
-        std::fs::read_to_string(path()).ok().and_then(|s| History::deserialize_json(&s).ok()).unwrap_or_default()
+        std::fs::read_to_string(path()).ok().and_then(|s| History::deserialize_json(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_default()
     }
 
     fn save(&self) {

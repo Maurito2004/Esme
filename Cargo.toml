@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 nanoserde = { version = "0.2", default-features = false, features = ["json"] }
 windows-numerics = "0.2"
+windows-core = "0.61"
 
 [dependencies.windows]
 version = "0.61"
@@ -34,6 +35,12 @@ features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_SystemServices",
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Security_Cryptography",
+    "Globalization",
     "Win32_System_WinRT",
     "Media_Control",
     "Storage_Streams",

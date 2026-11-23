@@ -100,7 +100,7 @@ impl Config {
     pub fn load() -> Self {
         let cfg = std::fs::read_to_string(config_path())
             .ok()
-            .and_then(|s| Config::deserialize_json(&s).ok())
+            .and_then(|s| Config::deserialize_json(s.trim_start_matches('\u{feff}')).ok())
             .unwrap_or_default();
         let mut cfg: Config = cfg;
         if !cfg.mascota {

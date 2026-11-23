@@ -18,6 +18,7 @@ pub const CMD_AJUSTES: u32 = 103;
 pub const CMD_SALIR: u32 = 104;
 pub const CMD_TRANSPARENTE: u32 = 105;
 pub const CMD_MOVER: u32 = 106;
+pub const CMD_OCR: u32 = 120;
 
 pub struct MenuState {
     pub autostart: bool,
@@ -92,6 +93,7 @@ impl Tray {
             let _ = AppendMenuW(menu, MF_STRING | chk(s.transparente), CMD_TRANSPARENTE as usize, w!("Fondo transparente al expandir"));
             let _ = AppendMenuW(menu, MF_STRING | chk(s.mover), CMD_MOVER as usize, w!("En pantalla completa: pasar al otro monitor"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+            let _ = AppendMenuW(menu, MF_STRING, CMD_OCR as usize, w!("Capturar texto (Ctrl+Alt+T)"));
             let _ = AppendMenuW(menu, MF_STRING, CMD_AJUSTES as usize, w!("Ajustes…"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, CMD_SALIR as usize, w!("Salir"));

@@ -46,6 +46,13 @@ pub struct MediaView<'a> {
     pub lyrics: Option<LyricsView<'a>>,
 }
 
+pub struct ShelfView<'a> {
+    /// (glifo, nombre visible) de cada archivo.
+    pub tiles: &'a [(&'static str, String)],
+    /// Hay archivos arrastrándose encima: resaltamos la zona.
+    pub drop_hover: bool,
+}
+
 pub struct ClipView<'a> {
     pub items: &'a [String],
     /// Fila recién copiada (muestra "✓ Copiado").
@@ -76,6 +83,8 @@ pub struct Frame<'a> {
     pub mascot_vis: f32,
     /// Panel del portapapeles abierto.
     pub clip: Option<ClipView<'a>>,
+    /// Estante de archivos abierto.
+    pub shelf: Option<ShelfView<'a>>,
 }
 
 struct Fonts {
@@ -91,6 +100,7 @@ struct Fonts {
     lyric_cur: IDWriteTextFormat,
     pill_lyric: IDWriteTextFormat,
     tiny: IDWriteTextFormat,
+    tile: IDWriteTextFormat,
 }
 
 pub struct Renderer {
@@ -117,6 +127,7 @@ const G_PAUSE: &str = "\u{E769}";
 const G_LYRICS: &str = "\u{E8E4}";
 const G_MUSIC: &str = "\u{E8D6}";
 const G_CLIP: &str = "\u{E77F}";
+const G_SHELF: &str = "\u{E8B7}";
 
 impl Renderer {
     pub fn new(hwnd: HWND, width_px: u32, height_px: u32, scale: f32) -> Result<Self> {
@@ -172,8 +183,9 @@ impl Renderer {
                 lyric_cur: tf(&dw, ui_font, 16.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
                 pill_lyric: tf(&dw, ui_font, 13.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
                 tiny: tf(&dw, ui_font, 9.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
+                tile: tf(&dw, ui_font, 11.0, DWRITE_FONT_WEIGHT_NORMAL, c)?,
             };
-            for f in [&fonts.title, &fonts.artist, &fonts.lyric, &fonts.lyric_cur, &fonts.pill_lyric] {
+            for f in [&fonts.title, &fonts.artist, &fonts.lyric, &fonts.lyric_cur, &fonts.pill_lyric, &fonts.tile] {
                 let sign = dw.CreateEllipsisTrimmingSign(f)?;
                 let trim = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, delimiter: 0, delimiterCount: 0 };
                 f.SetTrimming(&trim, &sign)?;
@@ -402,8 +414,55 @@ impl Renderer {
         if let Some(cv) = &f.clip {
             self.draw_clip(cv, l.clip, a, sh, f.hover)?;
         }
+        let on = f.shelf.is_some();
+        self.button(G_SHELF, &self.fonts.icon, l.shelf_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Shelf) || on, sh)?;
+        if let Some(sv) = &f.shelf {
+            self.draw_shelf(sv, l, a, sh, f.hover)?;
+        }
         unsafe {
             self.ctx.SetTransform(&Matrix3x2::identity());
+        }
+        Ok(())
+    }
+
+    fn draw_shelf(&self, sv: &ShelfView, l: &Layout, a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+        let area = l.shelf;
+        if sv.tiles.is_empty() || sv.drop_hover {
+            // Zona para soltar: borde punteado, ámbar cuando hay algo encima.
+            let (r, g, b, al) = if sv.drop_hover { (1.0, 0.72, 0.3, 0.95) } else { (1.0, 1.0, 1.0, 0.35) };
+            let br = self.brush(r, g, b, al * a)?;
+            let props = D2D1_STROKE_STYLE_PROPERTIES1 {
+                startCap: D2D1_CAP_STYLE_ROUND,
+                endCap: D2D1_CAP_STYLE_ROUND,
+                dashCap: D2D1_CAP_STYLE_ROUND,
+                lineJoin: D2D1_LINE_JOIN_ROUND,
+                miterLimit: 1.0,
+                dashStyle: D2D1_DASH_STYLE_DASH,
+                dashOffset: 0.0,
+                transformType: D2D1_STROKE_TRANSFORM_TYPE_NORMAL,
+            };
+            let dash = unsafe { self.d2d_factory.CreateStrokeStyle(&props, None)? };
+            let zone = R::new(area.l, area.t + 4.0, area.r, area.b);
+            let rr = D2D1_ROUNDED_RECT { rect: d2r(zone), radiusX: 12.0, radiusY: 12.0 };
+            unsafe { self.ctx.DrawRoundedRectangle(&rr, &br, 1.5, &dash) };
+            if sv.tiles.is_empty() || sv.drop_hover {
+                let msg = if sv.drop_hover { "Soltá para guardar en el estante" } else { "Arrastrá archivos acá para tenerlos a mano" };
+                if sv.tiles.is_empty() || sv.drop_hover {
+                    let txt = if sv.tiles.is_empty() { zone } else { R::new(zone.l, zone.b - 24.0, zone.r, zone.b - 4.0) };
+                    self.label(msg, &self.fonts.lyric, txt, (r, g, b, al * a), sh)?;
+                }
+            }
+        }
+        let n = sv.tiles.len();
+        for (i, (glyph, name)) in sv.tiles.iter().enumerate() {
+            let t = l.shelf_tile(i, n);
+            if hover == Some(Btn::ShelfItem(i)) {
+                let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.2 } else { 0.1 } * a)?;
+                let rr = D2D1_ROUNDED_RECT { rect: d2r(t), radiusX: 10.0, radiusY: 10.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+            }
+            self.label(glyph, &self.fonts.icon_big, R::new(t.l, t.t + 4.0, t.r, t.t + 38.0), (1.0, 1.0, 1.0, 0.9 * a), sh)?;
+            self.label(name, &self.fonts.tile, R::new(t.l + 3.0, t.t + 40.0, t.r - 3.0, t.b - 4.0), (1.0, 1.0, 1.0, 0.8 * a), sh)?;
         }
         Ok(())
     }

@@ -3,7 +3,7 @@
 Barra dinámica ("notch vivo") para Windows 10/11, en Rust nativo: Direct2D + DirectComposition,
 sin Electron, sin WebView, 100 % local.
 
-## Estado: v0.3 — Fases 1 y 2 completas, parte de las Fases 3 y 4
+## Estado: v0.3 — Fases 1, 2 y 3 completas, parte de la Fase 4
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -17,9 +17,9 @@ sin Electron, sin WebView, 100 % local.
 - Letras (lrclib.net): botón ☰ en el panel. Las sincronizadas resaltan la línea actual; clic en una
   línea salta a ese momento. Con las letras activadas, la píldora contraída muestra la línea actual.
   Se guardan en `%APPDATA%\Esme\letras` para no volver a pedirlas.
-- Mascotas vectoriales (Direct2D, sin imágenes), elegibles en la bandeja → Mascota:
-  - **Esme (Perrito)**, por defecto: orejas caídas con acentos azul medianoche y ámbar, ojos miel.
-  - **Gato**: ojitos luminosos y orejas puntiagudas.
+- Mascotas vectoriales (Direct2D, sin imágenes), solo ojos, elegibles en la bandeja → Mascota:
+  - **Esme (Perrito)**, por defecto: ojos ámbar/miel con brillo.
+  - **Gato**: los ojitos blancos originales.
   - Pestañean, miran hacia el cursor cuando está cerca, se duermen ("zzz") tras 3 minutos sin usar
     la PC y saludan (^ ^) al volver.
 
@@ -31,11 +31,16 @@ sin Electron, sin WebView, 100 % local.
 - Sin polling: eventos de Windows (ventana en primer plano, minimizar/restaurar) + aviso
   `ABN_FULLSCREENAPP` del shell.
 
-**Fase 3 (parcial) — historial del portapapeles**
-- Botón 📋 en el panel: los últimos textos copiados; clic para volver a copiarlos.
-- Guarda hasta 20 en `%APPDATA%\Esme\portapapeles.json`. Respeta a los gestores de contraseñas
-  (no guarda lo que marcan como excluido del historial).
-- Pendiente de la Fase 3: estante de archivos (drag & drop) y OCR con Ctrl+Alt+T.
+**Fase 3 — estante, portapapeles y OCR**
+- **Estante de archivos** (botón 📁): arrastrá archivos o carpetas sobre el notch y quedan a mano.
+  Clic abre el archivo; arrastralo hacia afuera para soltarlo en Discord, el navegador o una
+  carpeta (copia o vínculo, nunca mueve el original); clic derecho lo quita. Solo guarda las rutas
+  (hasta 10) en `%APPDATA%\Esme\estante.json`.
+- **Historial del portapapeles** (botón 📋): los últimos textos copiados; clic para volver a copiarlos.
+  Guarda hasta 20 en `%APPDATA%\Esme\portapapeles.json` y respeta a los gestores de contraseñas.
+- **Smart OCR** (`Ctrl + Alt + T` o bandeja → "Capturar texto"): congela la pantalla, elegís un área
+  y el texto se reconoce offline con `Windows.Media.Ocr` y se copia al portapapeles (aviso en la
+  píldora). Esc o clic derecho cancela.
 
 ## Estilos al expandir
 
