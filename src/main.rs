@@ -12,7 +12,10 @@ mod anim;
 mod app;
 mod wndproc;
 mod clipboard;
+mod ical;
 mod ocr;
+mod productivity;
+mod weather;
 mod shelf;
 mod system;
 mod config;
@@ -30,7 +33,7 @@ use config::Config;
 use lyrics::Lyrics;
 use mascot::{Mascot, Mood};
 use media::{Cmd, MediaInfo};
-use render::{ClipView, ShelfView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
+use render::{ClipView, ShelfView, TodayView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
 use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -73,6 +76,18 @@ const T_TOAST: usize = 14;
 const T_DROPCLOSE: usize = 15;
 const HOTKEY_OCR: i32 = 1;
 const T_OVERLAY: usize = 16;
+const T_POMO: usize = 17;
+const T_DATA: usize = 18;
+/// Clima y calendario se actualizan cada una hora.
+const DATA_REFRESH_MS: u32 = 60 * 60 * 1000;
+const WM_DATA: u32 = WM_APP + 9;
+
+/// Resultados de los hilos de clima y calendario.
+#[derive(Default)]
+struct DataInbox {
+    weather: Option<std::result::Result<weather::Weather, String>>,
+    events: Option<std::result::Result<Vec<ical::Event>, String>>,
+}
 const OVERLAY_MS: u32 = 1600;
 const WM_POWERBROADCAST: u32 = 0x0218;
 const PBT_POWERSETTINGCHANGE: usize = 0x8013;
@@ -167,6 +182,15 @@ struct App {
     _drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     // Aviso temporal en la píldora (ej. "Texto copiado").
     toast: Option<String>,
+    // Panel "Hoy" (Fase 5).
+    today_on: bool,
+    pomo: productivity::Pomodoro,
+    water: productivity::Water,
+    weather: Option<weather::Weather>,
+    weather_msg: String,
+    events: Vec<ical::Event>,
+    cal_msg: String,
+    inbox: Arc<Mutex<DataInbox>>,
     // Overlays del sistema (Fase 4).
     overlay: Option<SysOverlay>,
     audio: Option<system::Audio>,
@@ -281,6 +305,14 @@ fn main() -> Result<()> {
             press: None,
             _drop_target: None,
             toast: None,
+            today_on: false,
+            pomo: productivity::Pomodoro::new(),
+            water: productivity::Water::load(),
+            weather: None,
+            weather_msg: "Buscando el clima…".into(),
+            events: Vec::new(),
+            cal_msg: String::new(),
+            inbox: Arc::new(Mutex::new(DataInbox::default())),
             overlay: None,
             audio: None,
             shell_msg: 0,
@@ -332,6 +364,11 @@ fn main() -> Result<()> {
             &windows::Win32::System::SystemServices::GUID_ACDC_POWER_SOURCE,
             DEVICE_NOTIFY_WINDOW_HANDLE,
         );
+        // Clima y calendario: primera carga ahora y después cada una hora.
+        with_app(|a| {
+            a.refresh_data();
+            SetTimer(Some(a.hwnd), T_DATA, DATA_REFRESH_MS, None);
+        });
         with_app(|a| {
             a.audio = audio;
             a.shell_msg = shell_msg;

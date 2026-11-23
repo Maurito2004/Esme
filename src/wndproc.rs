@@ -105,6 +105,10 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 with_app(|a| a.on_clipboard());
                 LRESULT(0)
             }
+            WM_DATA => {
+                with_app(|a| a.on_data());
+                LRESULT(0)
+            }
             system::WM_SYS => {
                 with_app(|a| a.on_sys(wp.0, lp.0));
                 LRESULT(0)
@@ -138,6 +142,8 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                     transparente: a.cfg.transparente,
                                     mover: a.cfg.mover_monitor,
                                     dark: a.cfg.tema_menu != "claro",
+                                    water_goal: a.cfg.agua_meta,
+                                    has_ical: !a.cfg.ical_url.is_empty(),
                                 },
                             )
                         });

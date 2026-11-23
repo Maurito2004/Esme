@@ -23,7 +23,7 @@ impl Drop for Handle {
 pub fn get(host: &str, path: &str) -> Option<Response> {
     unsafe {
         let session = Handle(WinHttpOpen(
-            w!("Esme/0.4 (app de escritorio para Windows)"),
+            w!("Esme/0.5 (+https://github.com/Maurito2004/Esme)"),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),
@@ -73,7 +73,7 @@ pub fn get(host: &str, path: &str) -> Option<Response> {
                 break;
             }
             body.extend_from_slice(&buf[..read as usize]);
-            if body.len() > 4 * 1024 * 1024 {
+            if body.len() > 16 * 1024 * 1024 {
                 return None; // respuesta absurda: cortamos
             }
         }

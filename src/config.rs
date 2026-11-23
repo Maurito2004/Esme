@@ -36,11 +36,17 @@ pub struct Config {
     /// Tema del menú de la bandeja: "oscuro" (por defecto) o "claro".
     #[nserde(default)]
     pub tema_menu: String,
+    /// Meta diaria de vasos de agua (250 ml).
+    #[nserde(default = "8")]
+    pub agua_meta: u32,
+    /// URL privada iCal (ej. Google Calendar → "Dirección secreta en formato iCal").
+    #[nserde(default)]
+    pub ical_url: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { mascota: true, mascota_tipo: "esme".into(), notch_minimo: false, transparente: false, mover_monitor: true, juegos_extra: Vec::new(), tema_menu: "oscuro".into() }
+        Self { mascota: true, mascota_tipo: "esme".into(), notch_minimo: false, transparente: false, mover_monitor: true, juegos_extra: Vec::new(), tema_menu: "oscuro".into(), agua_meta: 8, ical_url: String::new() }
     }
 }
 

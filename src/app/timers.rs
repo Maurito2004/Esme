@@ -83,7 +83,7 @@ impl App {
 
     pub(crate) fn on_timer(&mut self, id: usize) {
         unsafe {
-            if id != T_PROGRESS && id != T_HOVERCHECK {
+            if id != T_PROGRESS && id != T_HOVERCHECK && id != T_POMO && id != T_DATA {
                 let _ = KillTimer(Some(self.hwnd), id);
             }
         }
@@ -126,6 +126,8 @@ impl App {
             }
             T_IDLE => self.check_idle(),
             T_FS => self.check_fullscreen(),
+            T_POMO => self.on_pomo_tick(),
+            T_DATA => self.refresh_data(),
             T_OVERLAY => {
                 self.overlay = None;
                 self.retarget();

@@ -15,6 +15,7 @@ impl App {
             self.shelf_on = true;
             self.lyrics_on = false;
             self.clip_on = false;
+            self.today_on = false;
         }
         self.retarget();
         self.refresh();

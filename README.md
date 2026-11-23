@@ -9,7 +9,7 @@ Bajá **Esme.exe** de la última versión en
 [Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
 arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 
-## Estado: v0.4 — Fases 1, 2 y 3 completas, Fase 4 casi completa
+## Estado: v0.5 — Fases 1, 2, 3 y 5 completas, Fase 4 casi completa
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -36,6 +36,17 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 - Cargador conectado/desconectado con porcentaje (solo en equipos con batería).
 - Pendiente: brillo (laptops) y estado de Wi-Fi. (Sin aviso de Bloq Mayús: requería leer el
   teclado de todo el sistema y Esme no lo hace.)
+
+**Fase 5 — panel "Hoy"** (botón 📅 en el panel expandido)
+- **Pomodoro** 25/5: play/pausa y reinicio; mientras corre, la píldora contraída muestra la cuenta
+  regresiva con su barra. Aviso y sonido al terminar cada etapa.
+- **Agua**: vasos de hoy con + / −, meta configurable (bandeja → Configuración → Meta de agua).
+  Se reinicia cada día (`%APPDATA%\Esme\agua.json`).
+- **Clima** de MET Norway (api.met.no): temperatura, estado y próximas 6 horas. Usa la ubicación
+  aproximada de Windows (tiene que estar activada) y se actualiza cada una hora.
+- **Calendario** de Google (solo lectura): copiá la "Dirección secreta en formato iCal" de tu
+  calendario y elegí bandeja → Configuración → Calendario → Pegar URL iCal copiada. Muestra los
+  próximos eventos (incluye repeticiones diarias, semanales, mensuales y anuales).
 
 **Modo juego / pantalla completa**
 - Si en el monitor principal hay un juego o un video a pantalla completa, el notch se pasa al otro

@@ -48,6 +48,21 @@ pub struct MediaView<'a> {
     pub lyrics: Option<LyricsView<'a>>,
 }
 
+/// Panel "Hoy": Pomodoro, agua, clima y próximos eventos.
+pub struct TodayView<'a> {
+    pub pomo_label: &'a str,
+    pub pomo_time: String,
+    pub pomo_running: bool,
+    pub pomo_progress: f32,
+    pub water: u32,
+    pub goal: u32,
+    pub weather_glyph: &'a str,
+    pub weather: &'a str,
+    /// (cuándo, título) de los próximos eventos; vacío = mostrar `cal_hint`.
+    pub events: &'a [(String, String)],
+    pub cal_hint: &'a str,
+}
+
 pub struct ShelfView<'a> {
     /// (glifo, nombre visible) de cada archivo.
     pub tiles: &'a [(&'static str, String)],
@@ -87,6 +102,8 @@ pub struct Frame<'a> {
     pub clip: Option<ClipView<'a>>,
     /// Estante de archivos abierto.
     pub shelf: Option<ShelfView<'a>>,
+    /// Panel "Hoy" abierto.
+    pub today: Option<TodayView<'a>>,
 }
 
 struct Fonts {
@@ -130,6 +147,7 @@ const G_LYRICS: &str = "\u{E8E4}";
 const G_MUSIC: &str = "\u{E8D6}";
 const G_CLIP: &str = "\u{E77F}";
 const G_SHELF: &str = "\u{E8B7}";
+const G_TODAY: &str = "\u{E787}";
 
 impl Renderer {
     pub fn new(hwnd: HWND, width_px: u32, height_px: u32, scale: f32) -> Result<Self> {
@@ -446,8 +464,74 @@ impl Renderer {
         if let Some(sv) = &f.shelf {
             self.draw_shelf(sv, l, a, sh, f.hover)?;
         }
+        let on = f.today.is_some();
+        self.button(G_TODAY, &self.fonts.icon, l.today_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Today) || on, sh)?;
+        if let Some(tv) = &f.today {
+            self.draw_today(tv, l, a, sh, f.hover)?;
+        }
         unsafe {
             self.ctx.SetTransform(&Matrix3x2::identity());
+        }
+        Ok(())
+    }
+
+    /// Barrita de progreso redondeada.
+    fn bar(&self, r: R, v: f32, color: (f32, f32, f32), a: f32) -> Result<()> {
+        let bg = self.brush(1.0, 1.0, 1.0, 0.18 * a)?;
+        let fg = self.brush(color.0, color.1, color.2, 0.95 * a)?;
+        let full = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 2.0, radiusY: 2.0 };
+        let x = r.l + (r.r - r.l) * v.clamp(0.0, 1.0);
+        unsafe {
+            self.ctx.FillRoundedRectangle(&full, &bg);
+            if v > 0.0 {
+                let done = D2D1_ROUNDED_RECT { rect: rect(r.l, r.t, x.max(r.l + 4.0), r.b), radiusX: 2.0, radiusY: 2.0 };
+                self.ctx.FillRoundedRectangle(&done, &fg);
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_today(&self, tv: &TodayView, l: &Layout, a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+        let dim = (1.0, 1.0, 1.0, 0.6 * a);
+        let white = (1.0, 1.0, 1.0, a);
+        let hv = |b: Btn| hover == Some(b);
+        let left = |row: R, w: f32| R::new(row.l + 4.0, row.t, row.l + 4.0 + w, row.b);
+
+        // Pomodoro.
+        let p = l.pomo_row;
+        self.label(tv.pomo_label, &self.fonts.artist, R::new(p.l + 4.0, p.t, l.pomo_toggle.l - 8.0, p.t + 18.0), dim, sh)?;
+        self.label(&tv.pomo_time, &self.fonts.title, R::new(p.l + 4.0, p.t + 16.0, p.l + 90.0, p.b), white, sh)?;
+        let by = p.t + 26.0;
+        self.bar(R::new(p.l + 96.0, by - 2.0, l.pomo_toggle.l - 12.0, by + 2.0), tv.pomo_progress, (1.0, 0.45, 0.35), a)?;
+        self.button(if tv.pomo_running { G_PAUSE } else { G_PLAY }, &self.fonts.icon, l.pomo_toggle, a, hv(Btn::PomoToggle), sh)?;
+        self.button("\u{E72C}", &self.fonts.icon, l.pomo_reset, a * 0.8, hv(Btn::PomoReset), sh)?;
+
+        // Agua.
+        let w = l.water_row;
+        self.label("Agua", &self.fonts.artist, R::new(w.l + 4.0, w.t, l.water_sub.l - 8.0, w.t + 18.0), dim, sh)?;
+        let txt = format!("{} / {} vasos", tv.water, tv.goal);
+        self.label(&txt, &self.fonts.artist, R::new(w.l + 4.0, w.t + 16.0, w.l + 120.0, w.b), white, sh)?;
+        let v = tv.water as f32 / tv.goal.max(1) as f32;
+        let by = w.t + 26.0;
+        self.bar(R::new(w.l + 124.0, by - 2.0, l.water_sub.l - 12.0, by + 2.0), v, (0.35, 0.65, 1.0), a)?;
+        self.button("\u{E738}", &self.fonts.icon, l.water_sub, a * 0.8, hv(Btn::WaterSub), sh)?;
+        self.button("\u{E710}", &self.fonts.icon, l.water_add, a, hv(Btn::WaterAdd), sh)?;
+
+        // Clima.
+        let c = l.weather_row;
+        self.label(tv.weather_glyph, &self.fonts.title, left(c, 24.0), white, sh)?;
+        self.label(tv.weather, &self.fonts.artist, R::new(c.l + 34.0, c.t, c.r - 4.0, c.b), white, sh)?;
+
+        // Calendario.
+        let k = l.cal_row;
+        self.label("\u{E787}", &self.fonts.icon, R::new(k.l + 4.0, k.t + 2.0, k.l + 28.0, k.t + 24.0), dim, sh)?;
+        if tv.events.is_empty() {
+            self.label(tv.cal_hint, &self.fonts.artist, R::new(k.l + 34.0, k.t + 2.0, k.r - 4.0, k.t + 24.0), dim, sh)?;
+        }
+        for (i, (when, title)) in tv.events.iter().take(2).enumerate() {
+            let y = k.t + 2.0 + i as f32 * 22.0;
+            self.label(when, &self.fonts.artist, R::new(k.l + 34.0, y, k.l + 140.0, y + 22.0), dim, sh)?;
+            self.label(title, &self.fonts.artist, R::new(k.l + 144.0, y, k.r - 4.0, y + 22.0), white, sh)?;
         }
         Ok(())
     }

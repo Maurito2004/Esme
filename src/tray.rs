@@ -33,6 +33,10 @@ pub const CMD_PET_OFF: u32 = 112;
 pub const CMD_OCR: u32 = 120;
 pub const CMD_TEMA_OSCURO: u32 = 130;
 pub const CMD_TEMA_CLARO: u32 = 131;
+pub const CMD_ICAL_PASTE: u32 = 140;
+pub const CMD_ICAL_CLEAR: u32 = 141;
+/// Meta de agua: CMD_WATER_GOAL + cantidad de vasos.
+pub const CMD_WATER_GOAL: u32 = 150;
 
 pub struct MenuState {
     pub autostart: bool,
@@ -42,6 +46,8 @@ pub struct MenuState {
     pub transparente: bool,
     pub mover: bool,
     pub dark: bool,
+    pub water_goal: u32,
+    pub has_ical: bool,
 }
 
 // Glifos de Segoe Fluent Icons / MDL2.
@@ -164,6 +170,17 @@ impl Tray {
             add_sep(cfg);
             add(cfg, CMD_MOVER as usize, it("En pantalla completa: pasar al otro monitor", None, s.mover));
             add(cfg, CMD_AUTOSTART as usize, it("Iniciar con Windows", None, s.autostart));
+            let water = CreatePopupMenu().unwrap_or_default();
+            for n in [6u32, 8, 10, 12] {
+                add(water, (CMD_WATER_GOAL + n) as usize, it(&format!("{n} vasos"), None, s.water_goal == n));
+            }
+            add_sub(cfg, water, it("Meta de agua", None, false));
+            let cal = CreatePopupMenu().unwrap_or_default();
+            add(cal, CMD_ICAL_PASTE as usize, it("Pegar URL iCal copiada", None, false));
+            if s.has_ical {
+                add(cal, CMD_ICAL_CLEAR as usize, it("Quitar calendario", None, false));
+            }
+            add_sub(cfg, cal, it(if s.has_ical { "Calendario (conectado)" } else { "Calendario" }, None, false));
             add_sub(menu, cfg, it("Configuración", Some(I_CONFIG), false));
 
             add_sep(menu);

@@ -3,6 +3,7 @@
 mod state;
 mod view;
 mod timers;
+mod today;
 mod media;
 mod input;
 mod panels;

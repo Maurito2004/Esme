@@ -29,11 +29,11 @@ impl App {
     }
 
     pub(crate) fn mascot_shown(&self) -> bool {
-        self.toast.is_none() && self.overlay.is_none() && self.cfg.pet().is_some() && !self.cfg.notch_minimo && !self.lyric_pill() && !self.playing()
+        self.toast.is_none() && self.overlay.is_none() && !self.pomo_pill() && self.cfg.pet().is_some() && !self.cfg.notch_minimo && !self.lyric_pill() && !self.playing()
     }
 
     pub(crate) fn collapsed_dims(&self) -> Dims {
-        if self.overlay.is_some() {
+        if self.overlay.is_some() || (self.pomo_pill() && self.toast.is_none()) {
             ui::PILL_OVERLAY
         } else if self.lyric_pill() || self.toast.is_some() {
             ui::PILL_LYRIC
@@ -54,6 +54,10 @@ impl App {
         }
         if self.shelf_on {
             d.h += ui::shelf_extra(self.shelf.items.len());
+            d.w = d.w.max(400.0);
+        }
+        if self.today_on {
+            d.h += ui::TODAY_EXTRA;
             d.w = d.w.max(400.0);
         }
         d
@@ -79,7 +83,7 @@ impl App {
     }
 
     pub(crate) fn layout_now(&self) -> Layout {
-        Layout::new(CANVAS_W / 2.0, self.content_top(), self.expanded_dims(), self.has_media(), self.lyrics_on, self.clip_on, self.shelf_on)
+        Layout::new(CANVAS_W / 2.0, self.content_top(), self.expanded_dims(), self.has_media(), self.lyrics_on, self.clip_on, self.shelf_on, self.today_on)
     }
 
     pub(crate) fn is_animating(&self) -> bool {

@@ -81,12 +81,19 @@ impl App {
 
         let line = self.current_line_text();
         let eyes = self.mascot.eyes();
+        let (wglyph, wtext) = self.weather_line();
+        let events = self.event_lines();
         let tiles: Vec<(&'static str, String)> =
             self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
+        let pomo_text = self.pomo.text();
         let collapsed = if let Some(o) = &self.overlay {
             Collapsed::Overlay { glyph: o.glyph, text: &o.text, level: o.level }
         } else if let Some(t) = &self.toast {
             Collapsed::Lyric(t)
+        } else if self.pomo_pill() {
+            // Pomodoro: cuenta regresiva viva en la píldora (rojo tomate = foco, verde = descanso).
+            let glyph = if self.pomo.mode == productivity::Mode::Focus { "\u{E916}" } else { "\u{E708}" };
+            Collapsed::Overlay { glyph, text: &pomo_text, level: Some(self.pomo.progress()) }
         } else if self.lyric_pill() {
             Collapsed::Lyric(&line)
         } else if self.cfg.notch_minimo {
@@ -151,6 +158,22 @@ impl App {
             mascot_vis: self.mascot_vis.value,
             clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
             shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
+            today: if self.today_on {
+                Some(TodayView {
+                    pomo_label: if self.pomo.mode == productivity::Mode::Focus { "Pomodoro · foco" } else { "Pomodoro · descanso" },
+                    pomo_time: self.pomo.text(),
+                    pomo_running: self.pomo.running(),
+                    pomo_progress: self.pomo.progress(),
+                    water: self.water.glasses,
+                    goal: self.cfg.agua_meta.max(1),
+                    weather_glyph: wglyph,
+                    weather: &wtext,
+                    events: &events,
+                    cal_hint: &self.cal_msg,
+                })
+            } else {
+                None
+            },
         };
         let ok = match self.renderer.as_mut() {
             Some(r) => r.draw(&frame, vsync).is_ok(),

@@ -34,6 +34,9 @@ pub fn shelf_extra(n: usize) -> f32 {
     if n == 0 { 64.0 } else { n.div_ceil(SHELF_COLS) as f32 * SHELF_TILE_H + 14.0 }
 }
 
+/// Alto extra del panel "Hoy" (Pomodoro, agua, clima y calendario).
+pub const TODAY_EXTRA: f32 = 168.0;
+
 pub const CLIP_ROW_H: f32 = 26.0;
 pub const CLIP_ROWS: usize = 5;
 
@@ -57,6 +60,11 @@ pub enum Btn {
     ClipItem(usize),
     Shelf,
     ShelfItem(usize),
+    Today,
+    PomoToggle,
+    PomoReset,
+    WaterAdd,
+    WaterSub,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -103,10 +111,20 @@ pub struct Layout {
     pub clip: R,
     pub shelf_btn: R,
     pub shelf: R,
+    pub today_btn: R,
+    pub today: R,
+    pub pomo_row: R,
+    pub water_row: R,
+    pub weather_row: R,
+    pub cal_row: R,
+    pub pomo_toggle: R,
+    pub pomo_reset: R,
+    pub water_add: R,
+    pub water_sub: R,
 }
 
 impl Layout {
-    pub fn new(cx: f32, top: f32, d: Dims, media: bool, lyrics: bool, clip: bool, shelf: bool) -> Self {
+    pub fn new(cx: f32, top: f32, d: Dims, media: bool, lyrics: bool, clip: bool, shelf: bool, today: bool) -> Self {
         // El área de letras ocupa lo que sobre debajo de los controles.
         let x0 = cx - d.w / 2.0;
         let x1 = cx + d.w / 2.0;
@@ -117,7 +135,7 @@ impl Layout {
             let tx = x0 + 94.0;
             l.title = R::new(tx, y0 + 15.0, x1 - 18.0, y0 + 36.0);
             l.artist = R::new(tx, y0 + 36.0, x1 - 18.0, y0 + 54.0);
-            let c = (tx + x1 - 52.0) / 2.0;
+            let c = tx + 56.0;
             let by = y0 + 70.0;
             let btn = |x: f32| R::new(x - 17.0, by - 14.0, x + 17.0, by + 14.0);
             l.prev = btn(c - 44.0);
@@ -126,6 +144,10 @@ impl Layout {
             l.lyrics_btn = btn(x1 - 34.0);
             l.clip_btn = btn(x1 - 72.0);
             l.shelf_btn = btn(x1 - 110.0);
+            l.today_btn = btn(x1 - 148.0);
+            if today {
+                l.set_today(R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0));
+            }
             if clip {
                 l.clip = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
             }
@@ -144,6 +166,10 @@ impl Layout {
             l.date = R::new(x0, y0 + 58.0, x1, y0 + 78.0);
             l.clip_btn = R::new(x1 - 46.0, y0 + 30.0, x1 - 12.0, y0 + 58.0);
             l.shelf_btn = R::new(x0 + 12.0, y0 + 30.0, x0 + 46.0, y0 + 58.0);
+            l.today_btn = R::new(x0 + 50.0, y0 + 30.0, x0 + 84.0, y0 + 58.0);
+            if today {
+                l.set_today(R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0));
+            }
             if clip {
                 l.clip = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
             }
@@ -155,6 +181,20 @@ impl Layout {
     }
 
     /// Qué control hay bajo el punto (x, y). `lyric_scroll` = índice (float) centrado.
+    /// Filas y botones del panel "Hoy".
+    fn set_today(&mut self, a: R) {
+        self.today = a;
+        self.pomo_row = R::new(a.l, a.t + 4.0, a.r, a.t + 40.0);
+        self.water_row = R::new(a.l, a.t + 44.0, a.r, a.t + 80.0);
+        self.weather_row = R::new(a.l, a.t + 84.0, a.r, a.t + 112.0);
+        self.cal_row = R::new(a.l, a.t + 114.0, a.r, a.b);
+        let b = |row: R, k: f32| R::new(row.r - 36.0 * k - 30.0, row.t + 4.0, row.r - 36.0 * k, row.b - 4.0);
+        self.pomo_toggle = b(self.pomo_row, 1.0);
+        self.pomo_reset = b(self.pomo_row, 0.0);
+        self.water_sub = b(self.water_row, 1.0);
+        self.water_add = b(self.water_row, 0.0);
+    }
+
     /// Rectángulo del archivo `i` del estante (centrado, hasta SHELF_COLS por fila).
     pub fn shelf_tile(&self, i: usize, n: usize) -> R {
         let cols = n.clamp(1, SHELF_COLS);
@@ -168,6 +208,21 @@ impl Layout {
         let pad = 4.0;
         if self.shelf_btn.inflate(pad).contains(x, y) {
             return Some(Btn::Shelf);
+        }
+        if self.today_btn.inflate(pad).contains(x, y) {
+            return Some(Btn::Today);
+        }
+        if self.today.r > self.today.l {
+            for (r, b) in [
+                (self.pomo_toggle, Btn::PomoToggle),
+                (self.pomo_reset, Btn::PomoReset),
+                (self.water_add, Btn::WaterAdd),
+                (self.water_sub, Btn::WaterSub),
+            ] {
+                if r.inflate(2.0).contains(x, y) {
+                    return Some(b);
+                }
+            }
         }
         for i in 0..shelf_n {
             if self.shelf_tile(i, shelf_n).contains(x, y) {

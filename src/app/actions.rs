@@ -141,14 +141,30 @@ impl App {
                 if self.clip_on {
                     self.lyrics_on = false;
                     self.shelf_on = false;
+                    self.today_on = false;
                 }
                 self.retarget();
             }
+            Btn::Today => {
+                self.today_on = !self.today_on;
+                if self.today_on {
+                    self.lyrics_on = false;
+                    self.clip_on = false;
+                    self.shelf_on = false;
+                    self.water = std::mem::take(&mut self.water).for_today();
+                }
+                self.retarget();
+            }
+            Btn::PomoToggle => self.pomo_toggle(),
+            Btn::PomoReset => self.pomo_reset(),
+            Btn::WaterAdd => self.water_add(1),
+            Btn::WaterSub => self.water_add(-1),
             Btn::Shelf => {
                 self.shelf_on = !self.shelf_on;
                 if self.shelf_on {
                     self.lyrics_on = false;
                     self.clip_on = false;
+                    self.today_on = false;
                 }
                 self.retarget();
             }
@@ -174,6 +190,7 @@ impl App {
                 if self.lyrics_on {
                     self.clip_on = false;
                     self.shelf_on = false;
+                    self.today_on = false;
                 }
                 if self.lyrics_on && self.lyrics.is_none() {
                     self.fetch_lyrics();
@@ -248,6 +265,17 @@ impl App {
                 self.check_fullscreen();
             }
             CMD_OCR => ocr::start(self.hwnd),
+            CMD_ICAL_PASTE => self.paste_ical(),
+            CMD_ICAL_CLEAR => {
+                self.cfg.ical_url.clear();
+                let _ = self.cfg.save();
+                self.refresh_data();
+            }
+            c if (CMD_WATER_GOAL + 1..=CMD_WATER_GOAL + 30).contains(&c) => {
+                self.cfg.agua_meta = c - CMD_WATER_GOAL;
+                let _ = self.cfg.save();
+                self.refresh();
+            }
             CMD_TEMA_OSCURO | CMD_TEMA_CLARO => {
                 self.cfg.tema_menu = if cmd == CMD_TEMA_CLARO { "claro" } else { "oscuro" }.into();
                 let _ = self.cfg.save();
