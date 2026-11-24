@@ -53,6 +53,59 @@ struct Summary {
     symbol_code: String,
 }
 
+#[derive(DeJson)]
+struct GeoResp {
+    #[nserde(default)]
+    results: Vec<GeoPlace>,
+}
+#[derive(DeJson)]
+struct GeoPlace {
+    name: String,
+    latitude: f64,
+    longitude: f64,
+    #[nserde(default)]
+    admin1: String,
+    #[nserde(default)]
+    country: String,
+}
+
+/// Busca una ciudad por nombre (Open-Meteo, gratis y sin cuenta).
+/// Devuelve ("Córdoba, Córdoba, Argentina", lat, lon). Bloqueante: llamar desde un hilo.
+pub fn geocode(name: &str) -> Result<(String, f64, f64), String> {
+    let q = name.trim();
+    if q.is_empty() {
+        return Err("Escribí el nombre de tu ciudad".into());
+    }
+    // "Córdoba, España": buscamos por el nombre y usamos el resto para elegir entre homónimos.
+    let mut parts = q.split(',').map(str::trim);
+    let name = parts.next().unwrap_or(q);
+    let hints: Vec<String> = parts.filter(|p| !p.is_empty()).map(|p| p.to_lowercase()).collect();
+    let path = format!("/v1/search?name={}&count=10&language=es&format=json", http::encode(name));
+    let r = http::get("geocoding-api.open-meteo.com", &path).ok_or("Sin conexión para buscar la ciudad")?;
+    if r.status != 200 {
+        return Err(format!("No pude buscar la ciudad (HTTP {})", r.status));
+    }
+    let g = GeoResp::deserialize_json(&r.body).map_err(|_| "Respuesta inválida al buscar la ciudad".to_string())?;
+    let matches = |p: &GeoPlace| {
+        let all = format!("{} {} {}", p.name, p.admin1, p.country).to_lowercase();
+        hints.iter().all(|h| all.contains(h.as_str()))
+    };
+    let mut results = g.results;
+    let pick = results.iter().position(matches).unwrap_or(0);
+    if results.is_empty() {
+        return Err(format!("No encontré «{name}»"));
+    }
+    let p = results.swap_remove(pick);
+    let mut label = p.name.clone();
+    for extra in [&p.admin1, &p.country] {
+        if !extra.is_empty() && *extra != p.name {
+            label += ", ";
+            label += extra;
+        }
+    }
+    Ok((label, p.latitude, p.longitude))
+}
+
 /// Ubicación aproximada desde Windows. None si el usuario no dio permiso.
 pub fn locate() -> Option<(f64, f64)> {
     use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator, PositionAccuracy};

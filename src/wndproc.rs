@@ -168,19 +168,12 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             (
                                 a.tray.clone(),
                                 MenuState {
-                                    autostart: config::autostart_enabled(),
                                     pet: match a.cfg.pet() {
                                         Some(config::Pet::Esme) => 0,
                                         Some(config::Pet::Gato) => 1,
                                         None => 2,
                                     },
-                                    minimo: a.cfg.notch_minimo,
-                                    transparente: a.cfg.transparente,
-                                    mover: a.cfg.mover_monitor,
                                     dark: a.cfg.tema_menu != "claro",
-                                    water_goal: a.cfg.agua_meta,
-                                    has_ical: !a.cfg.ical_url.is_empty(),
-                                    has_gemini: a.cfg.has_gemini_key(),
                                 },
                             )
                         });
@@ -217,7 +210,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 if sm != 0 && msg == sm {
                     if (wp.0 & 0x7FFF) == HSHELL_LANGUAGE {
                         let name = system::layout_name(lp.0);
-                        if !name.is_empty() {
+                        if !name.is_empty() && with_app(|a| a.cfg.aviso_teclado).unwrap_or(true) {
                             with_app(|a| a.show_overlay("\u{E765}", name, None));
                         }
                     }

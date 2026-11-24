@@ -9,3 +9,4 @@ mod input;
 mod panels;
 mod actions;
 mod ask;
+mod settings;

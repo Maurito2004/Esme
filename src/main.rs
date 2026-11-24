@@ -27,6 +27,7 @@ mod lyrics;
 mod mascot;
 mod media;
 mod render;
+mod settings;
 mod tray;
 mod ui;
 
@@ -138,6 +139,8 @@ const IDLE_CHECK_ASLEEP_MS: u32 = 1_000;
 
 struct App {
     hwnd: HWND,
+    /// Ventana de Ajustes (solo existe mientras está abierta).
+    settings: Option<settings::Settings>,
     renderer: Option<Renderer>,
     tray: Tray,
     cfg: Config,
@@ -291,8 +294,10 @@ fn main() -> Result<()> {
         let _ = QueryPerformanceFrequency(&mut qpf);
         let (media_tx, media_shared) = media::start(hwnd);
         let start = if cfg.notch_minimo { ui::MINIMAL } else { ui::PILL };
+        let pomo = productivity::Pomodoro::new(cfg.pomo_foco, cfg.pomo_descanso);
         let app = App {
             hwnd,
+            settings: None,
             renderer: None,
             tray: Tray::new(hwnd),
             sw: Spring::new(start.w, 380.0, 0.28).with_eps(0.05),
@@ -342,7 +347,7 @@ fn main() -> Result<()> {
             toast: None,
             today_on: false,
             today_loaded: false,
-            pomo: productivity::Pomodoro::new(),
+            pomo,
             water: productivity::Water::load(),
             weather: None,
             weather_msg: "Abrí «Hoy» para cargar el clima".into(),

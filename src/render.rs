@@ -790,18 +790,26 @@ impl Renderer {
         let white = (1.0, 1.0, 1.0, a);
         let hv = |b: Btn| hover == Some(b);
         let left = |row: R, w: f32| R::new(row.l + 4.0, row.t, row.l + 4.0 + w, row.b);
+        let shown = |row: R| row.l > -1000.0;
+        if ![l.pomo_row, l.water_row, l.weather_row, l.cal_row].iter().any(|r| shown(*r)) {
+            let t = l.today;
+            return self.label("Elegí qué mostrar en Ajustes → Hoy", &self.fonts.artist, R::new(t.l + 4.0, t.t + 4.0, t.r - 4.0, t.t + 32.0), dim, sh);
+        }
 
         // Pomodoro.
         let p = l.pomo_row;
+        if shown(p) {
         self.label(tv.pomo_label, &self.fonts.artist, R::new(p.l + 4.0, p.t, l.pomo_toggle.l - 8.0, p.t + 18.0), dim, sh)?;
         self.label(&tv.pomo_time, &self.fonts.title, R::new(p.l + 4.0, p.t + 16.0, p.l + 90.0, p.b), white, sh)?;
         let by = p.t + 26.0;
         self.bar(R::new(p.l + 96.0, by - 2.0, l.pomo_toggle.l - 12.0, by + 2.0), tv.pomo_progress, (1.0, 0.45, 0.35), a)?;
         self.button(if tv.pomo_running { G_PAUSE } else { G_PLAY }, &self.fonts.icon, l.pomo_toggle, a, hv(Btn::PomoToggle), sh)?;
         self.button("\u{E72C}", &self.fonts.icon, l.pomo_reset, a * 0.8, hv(Btn::PomoReset), sh)?;
+        }
 
         // Agua.
         let w = l.water_row;
+        if shown(w) {
         self.label("Agua", &self.fonts.artist, R::new(w.l + 4.0, w.t, l.water_sub.l - 8.0, w.t + 18.0), dim, sh)?;
         let txt = format!("{} / {} vasos", tv.water, tv.goal);
         self.label(&txt, &self.fonts.artist, R::new(w.l + 4.0, w.t + 16.0, w.l + 120.0, w.b), white, sh)?;
@@ -810,14 +818,20 @@ impl Renderer {
         self.bar(R::new(w.l + 124.0, by - 2.0, l.water_sub.l - 12.0, by + 2.0), v, (0.35, 0.65, 1.0), a)?;
         self.button("\u{E738}", &self.fonts.icon, l.water_sub, a * 0.8, hv(Btn::WaterSub), sh)?;
         self.button("\u{E710}", &self.fonts.icon, l.water_add, a, hv(Btn::WaterAdd), sh)?;
+        }
 
         // Clima.
         let c = l.weather_row;
-        self.label(tv.weather_glyph, &self.fonts.title, left(c, 24.0), white, sh)?;
-        self.label(tv.weather, &self.fonts.artist, R::new(c.l + 34.0, c.t, c.r - 4.0, c.b), white, sh)?;
+        if shown(c) {
+            self.label(tv.weather_glyph, &self.fonts.title, left(c, 24.0), white, sh)?;
+            self.label(tv.weather, &self.fonts.artist, R::new(c.l + 34.0, c.t, c.r - 4.0, c.b), white, sh)?;
+        }
 
         // Calendario.
         let k = l.cal_row;
+        if !shown(k) {
+            return Ok(());
+        }
         self.label("\u{E787}", &self.fonts.icon, R::new(k.l + 4.0, k.t + 2.0, k.l + 28.0, k.t + 24.0), dim, sh)?;
         if tv.events.is_empty() {
             self.label(tv.cal_hint, &self.fonts.artist, R::new(k.l + 34.0, k.t + 2.0, k.r - 4.0, k.t + 24.0), dim, sh)?;
@@ -1144,7 +1158,7 @@ impl Renderer {
     }
 }
 
-fn font_exists(dw: &IDWriteFactory, family: &str) -> bool {
+pub(crate) fn font_exists(dw: &IDWriteFactory, family: &str) -> bool {
     unsafe {
         let mut col = None;
         if dw.GetSystemFontCollection(&mut col, false).is_err() {
@@ -1174,7 +1188,7 @@ fn swap_desc(w: u32, h: u32) -> DXGI_SWAP_CHAIN_DESC1 {
     }
 }
 
-fn tf(dw: &IDWriteFactory, family: &str, size: f32, weight: DWRITE_FONT_WEIGHT, align: DWRITE_TEXT_ALIGNMENT) -> Result<IDWriteTextFormat> {
+pub(crate) fn tf(dw: &IDWriteFactory, family: &str, size: f32, weight: DWRITE_FONT_WEIGHT, align: DWRITE_TEXT_ALIGNMENT) -> Result<IDWriteTextFormat> {
     unsafe {
         let fam: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
         let f = dw.CreateTextFormat(PCWSTR(fam.as_ptr()), None, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, w!("es-AR"))?;

@@ -40,18 +40,12 @@ pub const CMD_GEMINI_PASTE: u32 = 145;
 pub const CMD_GEMINI_CLEAR: u32 = 146;
 /// Meta de agua: CMD_WATER_GOAL + cantidad de vasos.
 pub const CMD_WATER_GOAL: u32 = 150;
+pub const CMD_SETTINGS: u32 = 160;
 
 pub struct MenuState {
-    pub autostart: bool,
     /// 0 = Esme, 1 = Gato, 2 = desactivada.
     pub pet: u8,
-    pub minimo: bool,
-    pub transparente: bool,
-    pub mover: bool,
     pub dark: bool,
-    pub water_goal: u32,
-    pub has_ical: bool,
-    pub has_gemini: bool,
 }
 
 // Glifos de Segoe Fluent Icons / MDL2.
@@ -175,36 +169,7 @@ impl Tray {
             add(pets, CMD_PET_OFF as usize, it("Desactivada", None, s.pet == 2));
             add_sub(menu, pets, it("Mascota", Some(I_PET), false));
 
-            let cfg = CreatePopupMenu().unwrap_or_default();
-            let theme = CreatePopupMenu().unwrap_or_default();
-            add(theme, CMD_TEMA_OSCURO as usize, it("Oscuro", None, s.dark));
-            add(theme, CMD_TEMA_CLARO as usize, it("Claro", None, !s.dark));
-            add_sub(cfg, theme, it("Tema del menú", Some(I_TEMA), false));
-            let look = CreatePopupMenu().unwrap_or_default();
-            add(look, CMD_MINIMO as usize, it("Notch mínimo", None, s.minimo));
-            add(look, CMD_TRANSPARENTE as usize, it("Fondo transparente al expandir", None, s.transparente));
-            add_sub(cfg, look, it("Apariencia", Some(I_PANTALLA), false));
-            add_sep(cfg);
-            add(cfg, CMD_MOVER as usize, it("En pantalla completa: pasar al otro monitor", None, s.mover));
-            add(cfg, CMD_AUTOSTART as usize, it("Iniciar con Windows", None, s.autostart));
-            let water = CreatePopupMenu().unwrap_or_default();
-            for n in [6u32, 8, 10, 12] {
-                add(water, (CMD_WATER_GOAL + n) as usize, it(&format!("{n} vasos"), None, s.water_goal == n));
-            }
-            add_sub(cfg, water, it("Meta de agua", None, false));
-            let cal = CreatePopupMenu().unwrap_or_default();
-            add(cal, CMD_ICAL_PASTE as usize, it("Pegar URL iCal copiada", None, false));
-            if s.has_ical {
-                add(cal, CMD_ICAL_CLEAR as usize, it("Quitar calendario", None, false));
-            }
-            add_sub(cfg, cal, it(if s.has_ical { "Calendario (conectado)" } else { "Calendario" }, None, false));
-            let ai = CreatePopupMenu().unwrap_or_default();
-            add(ai, CMD_GEMINI_PASTE as usize, it("Pegar API Key de Gemini copiada (cifrado DPAPI)", None, false));
-            if s.has_gemini {
-                add(ai, CMD_GEMINI_CLEAR as usize, it("Borrar API Key de Gemini", None, false));
-            }
-            add_sub(cfg, ai, it(if s.has_gemini { "IA Gemini (configurada)" } else { "IA Gemini" }, None, false));
-            add_sub(menu, cfg, it("Configuración", Some(I_CONFIG), false));
+            add(menu, CMD_SETTINGS as usize, it("Ajustes…", Some(I_CONFIG), false));
 
             add_sep(menu);
             add(menu, CMD_SALIR as usize, it("Salir", Some(I_SALIR), false));

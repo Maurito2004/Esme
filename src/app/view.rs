@@ -54,7 +54,8 @@ impl App {
             if force_dpi || self.scale <= 0.0 {
                 let (mut dx, mut dy) = (96u32, 96u32);
                 let _ = GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-                self.scale = (dx as f32 / 96.0).max(0.5);
+                // Escala de Windows × tamaño elegido en Ajustes (100/115/130 %).
+                self.scale = (dx as f32 / 96.0 * self.cfg.tamano.clamp(100, 130) as f32 / 100.0).max(0.5);
             }
             let (tw, th) = self.target_surface_dips(full);
             self.surf_w = tw;

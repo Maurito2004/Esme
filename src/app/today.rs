@@ -28,19 +28,27 @@ impl App {
             let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_DATA, WPARAM(0), LPARAM(0));
         };
         let inbox = self.inbox_slot();
-        std::thread::spawn(move || {
-            unsafe {
-                let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
-            }
-            let res = match weather::locate() {
-                None => Err("Activá la ubicación de Windows para ver el clima".to_string()),
-                Some((lat, lon)) => weather::fetch(lat, lon).ok_or_else(|| "Sin conexión con el clima".to_string()),
-            };
-            inbox.lock().unwrap().weather = Some(res);
-            post();
-        });
+        // Ciudad elegida en Ajustes; si no hay, la ubicación de Windows.
+        let city = (!self.cfg.ciudad.is_empty() && (self.cfg.ciudad_lat != 0.0 || self.cfg.ciudad_lon != 0.0))
+            .then_some((self.cfg.ciudad_lat, self.cfg.ciudad_lon));
+        if self.cfg.hoy_clima {
+            std::thread::spawn(move || {
+                let pos = city.or_else(|| {
+                    unsafe {
+                        let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
+                    }
+                    weather::locate()
+                });
+                let res = match pos {
+                    None => Err("Elegí tu ciudad en Ajustes → Hoy".to_string()),
+                    Some((lat, lon)) => weather::fetch(lat, lon).ok_or_else(|| "Sin conexión con el clima".to_string()),
+                };
+                inbox.lock().unwrap().weather = Some(res);
+                post();
+            });
+        }
         let url = self.cfg.ical_url.clone();
-        if !url.is_empty() {
+        if !url.is_empty() && self.cfg.hoy_calendario {
             let inbox = self.inbox_slot();
             std::thread::spawn(move || {
                 let res = ical::fetch(&url);
@@ -49,7 +57,7 @@ impl App {
             });
         } else {
             self.events.clear();
-            self.cal_msg = "Conectá tu calendario desde la bandeja".into();
+            self.cal_msg = "Conectá tu calendario en Ajustes → Hoy".into();
         }
     }
 
@@ -139,10 +147,12 @@ impl App {
                 let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(MB_ICONASTERISK);
             }
             let msg = match done {
-                productivity::Mode::Focus => "¡Terminó el foco! Descanso de 5 minutos",
-                productivity::Mode::Break => "¡A enfocarse! 25 minutos",
+                productivity::Mode::Focus => {
+                    format!("¡Terminó el foco! Descanso de {} minutos", self.pomo.minutes(productivity::Mode::Break))
+                }
+                productivity::Mode::Break => format!("¡A enfocarse! {} minutos", self.pomo.minutes(productivity::Mode::Focus)),
             };
-            self.show_toast(msg.into(), 3500);
+            self.show_toast(msg, 3500);
         }
         self.refresh();
     }

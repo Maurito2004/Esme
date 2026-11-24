@@ -64,7 +64,7 @@ impl App {
             d.w = d.w.max(400.0);
         }
         if self.today_on {
-            d.h += ui::TODAY_EXTRA;
+            d.h += ui::today_extra(self.today_mask());
             d.w = d.w.max(400.0);
         }
         if self.ask_on {
@@ -107,9 +107,23 @@ impl App {
             self.lyrics_on,
             self.clip_on,
             self.shelf_on,
-            self.today_on,
+            self.today_mask(),
             self.ask_on,
         )
+    }
+
+    /// Filas visibles del panel "Hoy" (0 si está cerrado).
+    pub(crate) fn today_mask(&self) -> u8 {
+        if !self.today_on {
+            return 0;
+        }
+        let c = &self.cfg;
+        let mut m = ui::TODAY_OPEN;
+        if c.hoy_pomodoro { m |= ui::TODAY_POMO; }
+        if c.hoy_agua { m |= ui::TODAY_WATER; }
+        if c.hoy_clima { m |= ui::TODAY_WEATHER; }
+        if c.hoy_calendario { m |= ui::TODAY_CAL; }
+        m
     }
 
     pub(crate) fn is_animating(&self) -> bool {

@@ -22,6 +22,7 @@ impl App {
 
     pub(crate) fn on_sys(&mut self, kind: usize, value: isize) {
         match kind {
+            system::SYS_VOLUME if !self.cfg.aviso_volumen => {}
             system::SYS_VOLUME => {
                 let pct = (value & 0xFF) as f32;
                 let muted = (value >> 8) & 1 == 1;
@@ -41,7 +42,7 @@ impl App {
                 if let Some(a) = self.audio.as_mut() {
                     a.attach_default();
                     let name = a.device_name.clone();
-                    if !name.is_empty() {
+                    if !name.is_empty() && self.cfg.aviso_audio {
                         self.show_overlay("\u{E7F6}", name, None);
                     }
                 }
@@ -62,7 +63,7 @@ impl App {
             if s.PowerSetting == GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS {
                 // Brillo (notebooks): ícono de sol y barra.
                 let prev = self.last_brightness.replace(value);
-                if prev.is_some() && prev != Some(value) {
+                if prev.is_some() && prev != Some(value) && self.cfg.aviso_brillo {
                     self.show_overlay("\u{E706}", format!("{}", value.min(100)), Some(value.min(100) as f32 / 100.0));
                 }
                 return;
@@ -73,7 +74,7 @@ impl App {
                 let on_battery = self.last_ac.map(|a| a != 0).unwrap_or(false);
                 if let Some(p) = prev {
                     for limit in [20u32, 10] {
-                        if on_battery && p > limit && value <= limit {
+                        if on_battery && p > limit && value <= limit && self.cfg.aviso_bateria {
                             self.show_overlay("\u{E850}", format!("Batería baja · {value}%"), None);
                         }
                     }
@@ -85,7 +86,7 @@ impl App {
             }
             let src = *(s.Data.as_ptr() as *const u32);
             let prev = self.last_ac.replace(src);
-            if prev.is_none() || prev == Some(src) {
+            if prev.is_none() || prev == Some(src) || !self.cfg.aviso_energia {
                 return; // el primer aviso es el estado inicial
             }
             let mut st = SYSTEM_POWER_STATUS::default();
@@ -322,6 +323,7 @@ impl App {
                 self.check_fullscreen();
             }
             CMD_OCR => ocr::start(self.hwnd),
+            CMD_SETTINGS => self.open_settings(),
             CMD_ASK => self.toggle_ask(true),
             CMD_ICAL_PASTE => self.paste_ical(),
             CMD_ICAL_CLEAR => {

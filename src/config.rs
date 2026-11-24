@@ -48,6 +48,45 @@ pub struct Config {
     /// API Key de Gemini cifrada con Windows DPAPI (en hexadecimal, atada al usuario actual de Windows).
     #[nserde(default)]
     pub gemini_key_dpapi: String,
+
+    // ---------- Fase 8: Ajustes ----------
+    /// Tamaño del notch en % (100, 115 o 130) sobre la escala de Windows.
+    #[nserde(default = "100")]
+    pub tamano: u32,
+    /// Ciudad elegida para el clima (vacía = usar la ubicación de Windows).
+    #[nserde(default)]
+    pub ciudad: String,
+    #[nserde(default)]
+    pub ciudad_lat: f64,
+    #[nserde(default)]
+    pub ciudad_lon: f64,
+    /// Qué filas muestra el panel "Hoy".
+    #[nserde(default = "true")]
+    pub hoy_pomodoro: bool,
+    #[nserde(default = "true")]
+    pub hoy_agua: bool,
+    #[nserde(default = "true")]
+    pub hoy_clima: bool,
+    #[nserde(default = "true")]
+    pub hoy_calendario: bool,
+    /// Minutos de foco y de descanso del Pomodoro.
+    #[nserde(default = "25")]
+    pub pomo_foco: u32,
+    #[nserde(default = "5")]
+    pub pomo_descanso: u32,
+    /// Avisos del sistema en la píldora.
+    #[nserde(default = "true")]
+    pub aviso_volumen: bool,
+    #[nserde(default = "true")]
+    pub aviso_audio: bool,
+    #[nserde(default = "true")]
+    pub aviso_teclado: bool,
+    #[nserde(default = "true")]
+    pub aviso_energia: bool,
+    #[nserde(default = "true")]
+    pub aviso_brillo: bool,
+    #[nserde(default = "true")]
+    pub aviso_bateria: bool,
 }
 
 impl Default for Config {
@@ -64,6 +103,22 @@ impl Default for Config {
             ical_url: String::new(),
             gemini_model: "gemini-2.5-flash".into(),
             gemini_key_dpapi: String::new(),
+            tamano: 100,
+            ciudad: String::new(),
+            ciudad_lat: 0.0,
+            ciudad_lon: 0.0,
+            hoy_pomodoro: true,
+            hoy_agua: true,
+            hoy_clima: true,
+            hoy_calendario: true,
+            pomo_foco: 25,
+            pomo_descanso: 5,
+            aviso_volumen: true,
+            aviso_audio: true,
+            aviso_teclado: true,
+            aviso_energia: true,
+            aviso_brillo: true,
+            aviso_bateria: true,
         }
     }
 }
@@ -135,6 +190,12 @@ impl Config {
         if cfg.gemini_model.trim().is_empty() {
             cfg.gemini_model = "gemini-2.5-flash".into();
         }
+        if !matches!(cfg.tamano, 100 | 115 | 130) {
+            cfg.tamano = 100;
+        }
+        cfg.pomo_foco = cfg.pomo_foco.clamp(5, 90);
+        cfg.pomo_descanso = cfg.pomo_descanso.clamp(1, 30);
+        cfg.agua_meta = cfg.agua_meta.clamp(1, 20);
         // Asegura que el archivo exista para que "Ajustes" pueda abrirlo.
         if !config_path().exists() {
             let _ = Self::save(&cfg);

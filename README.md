@@ -7,15 +7,14 @@ sin Electron, sin WebView, 100 % local.
 
 Bajá **Esme.exe** de la última versión en
 [Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
-arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
+arriba al centro. Clic derecho en el ícono de la bandeja → "Ajustes…" para configurarla.
 
-## Estado: v0.8 — Fases 1, 2, 3, 5 y 7 completas, Fase 4 casi completa, Fase 6 en curso
+## Estado: v0.9 — Fases 1, 2, 3, 5, 7 y 8 completas, Fase 4 casi completa, Fase 6 en curso
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
 - Notch arriba al centro del monitor principal; se expande con un resorte al pasar el mouse.
-- Bandeja: Iniciar con Windows, Mascota, Notch mínimo, **Fondo transparente al expandir**,
-  Ajustes… y Salir. Clic izquierdo en el ícono: fija o suelta el notch expandido.
+- Bandeja: Ask Esme, Capturar texto, Mascota, Ajustes… y Salir. Clic izquierdo en el ícono: fija o suelta el notch expandido.
 
 **Fase 2 — multimedia, letras y mascota**
 - Multimedia (Windows SMTC): Spotify, Brave, Firefox, YouTube, etc. Carátula, título, artista,
@@ -40,12 +39,12 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 **Fase 5 — panel "Hoy"** (botón 📅 en el panel expandido)
 - **Pomodoro** 25/5: play/pausa y reinicio; mientras corre, la píldora contraída muestra la cuenta
   regresiva con su barra. Aviso y sonido al terminar cada etapa.
-- **Agua**: vasos de hoy con + / −, meta configurable (bandeja → Configuración → Meta de agua).
+- **Agua**: vasos de hoy con + / −, meta configurable (Ajustes → Hoy → Meta de agua).
   Se reinicia cada día (`%APPDATA%\Esme\agua.json`).
 - **Clima** de MET Norway (api.met.no): temperatura, estado y próximas 6 horas. Usa la ubicación
-  aproximada de Windows (tiene que estar activada) y se actualiza cada una hora.
+  aproximada de Windows o la ciudad que elijas en Ajustes → Hoy, y se actualiza cada una hora.
 - **Calendario** de Google (solo lectura): copiá la "Dirección secreta en formato iCal" de tu
-  calendario y elegí bandeja → Configuración → Calendario → Pegar URL iCal copiada. Muestra los
+  calendario y elegí Ajustes → Hoy → Pegar dirección (hay pasos guiados). Muestra los
   próximos eventos (incluye repeticiones diarias, semanales, mensuales y anuales).
 
 **Animaciones** (cortas y solo cuando pasa algo; en reposo no corre ninguna)
@@ -58,7 +57,7 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 
 **Modo juego / pantalla completa**
 - Si en el monitor principal hay un juego o un video a pantalla completa, el notch se pasa al otro
-  monitor (opción de la bandeja "En pantalla completa: pasar al otro monitor") o se esconde, y vuelve
+  monitor (Ajustes → General → "Pasar al otro monitor") o se esconde, y vuelve
   solo al terminar. Roblox cuenta aunque esté maximizado con barra de título; otros juegos se agregan
   en `config.json` → `"juegos_extra": ["minecraft.exe"]`.
 - Sin polling: eventos de Windows (ventana en primer plano, minimizar/restaurar) + aviso
@@ -85,8 +84,8 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
   actualizan una vez por día y quedan guardadas para usarlas sin internet.
 - **Timer rápido**: `timer 10m`, `timer 45s`, `timer 1h 30m` + Enter; la píldora muestra la cuenta.
 - **Preguntar / Traducir** (Tab cambia de modo) y **Resumir clip** / **Corregir** lo copiado, con
-  Gemini. Necesita tu propia API Key gratuita de Google AI Studio: copiala y elegí bandeja →
-  Configuración → IA Gemini → Pegar API Key. Se guarda cifrada con Windows (DPAPI), atada a tu
+  Gemini. Necesita tu propia API Key gratuita de Google AI Studio: copiala y elegí Ajustes →
+  Ask Esme → Pegar key. Se guarda cifrada con Windows (DPAPI), atada a tu
   usuario, y viaja en un header HTTPS, nunca en la URL.
 
 **Fase 7 — optimización**
@@ -97,6 +96,20 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
   Ask Esme; el OCR, al usarlo.
 - Las carátulas se guardan ya achicadas al tamaño en que se dibujan.
 - Esme.exe pesa unos 600 KB.
+
+**Fase 8 — Ajustes** (bandeja → "Ajustes…")
+- Ventana de Ajustes con secciones: General, Apariencia, Hoy, Ask Esme, Avisos y Acerca de.
+  Los cambios se guardan solos. La ventana solo existe mientras está abierta: al cerrarla, Esme
+  vuelve a ocupar lo mismo que antes.
+- **Tamaño del notch**: 100 %, 115 % o 130 %.
+- **Clima por ciudad**, sin activar la ubicación de Windows: escribí tu ciudad y tocá Buscar
+  (para homónimos: "Córdoba, España").
+- **Calendario de Google** con pasos guiados y un botón que abre la página justa.
+- Elegí qué mostrar en el panel **Hoy** (Pomodoro, agua, clima, calendario), los minutos del
+  Pomodoro y la meta de agua.
+- Encendé o apagá cada **aviso** de la píldora (volumen, salida de audio, teclado, cargador,
+  brillo, batería baja).
+- **Ask Esme**: botón para conseguir la API Key gratis, pegarla o borrarla, y elegir el modelo.
 
 ## Estilos al expandir
 

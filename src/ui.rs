@@ -34,8 +34,26 @@ pub fn shelf_extra(n: usize) -> f32 {
     if n == 0 { 64.0 } else { n.div_ceil(SHELF_COLS) as f32 * SHELF_TILE_H + 14.0 }
 }
 
-/// Alto extra del panel "Hoy" (Pomodoro, agua, clima y calendario).
-pub const TODAY_EXTRA: f32 = 168.0;
+/// Filas del panel "Hoy" (máscara de bits; TODAY_OPEN = panel abierto).
+pub const TODAY_POMO: u8 = 1;
+pub const TODAY_WATER: u8 = 2;
+pub const TODAY_WEATHER: u8 = 4;
+pub const TODAY_CAL: u8 = 8;
+pub const TODAY_OPEN: u8 = 0x10;
+
+/// Alto extra del panel "Hoy" según qué filas están visibles (todas = 168).
+pub fn today_extra(mask: u8) -> f32 {
+    let mut h = 2.0;
+    if mask & TODAY_POMO != 0 { h += 40.0; }
+    if mask & TODAY_WATER != 0 { h += 40.0; }
+    if mask & TODAY_WEATHER != 0 { h += 32.0; }
+    if mask & TODAY_CAL != 0 { h += 54.0; }
+    if mask & 0x0F == 0 { h += 32.0; }
+    h
+}
+
+/// Rectángulo fuera de pantalla para filas ocultas (nunca se dibuja ni recibe clics).
+const OFF: R = R { l: -10000.0, t: -10000.0, r: -10000.0, b: -10000.0 };
 
 /// Alto extra del panel Ask Esme (barra de modo + acciones + input; crece si hay respuesta).
 pub const ASK_BASE_EXTRA: f32 = 76.0;
@@ -89,6 +107,14 @@ impl R {
     pub fn new(l: f32, t: f32, r: f32, b: f32) -> Self {
         Self { l, t, r, b }
     }
+    pub fn w(&self) -> f32 {
+        self.r - self.l
+    }
+
+    pub fn h(&self) -> f32 {
+        self.b - self.t
+    }
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.l && x <= self.r && y >= self.t && y <= self.b
     }
@@ -150,7 +176,7 @@ impl Layout {
         lyrics: bool,
         clip: bool,
         shelf: bool,
-        today: bool,
+        today: u8,
         ask: bool,
     ) -> Self {
         // El área de letras ocupa lo que sobre debajo de los controles.
@@ -175,8 +201,8 @@ impl Layout {
             l.today_btn = btn(x1 - 132.0);
             l.ask_btn = btn(x1 - 166.0);
             let sub = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
-            if today {
-                l.set_today(sub);
+            if today != 0 {
+                l.set_today(sub, today);
             }
             if clip {
                 l.clip = sub;
@@ -202,8 +228,8 @@ impl Layout {
             l.shelf_btn = R::new(x0 + 12.0, y0 + 30.0, x0 + 46.0, y0 + 58.0);
             l.today_btn = R::new(x0 + 50.0, y0 + 30.0, x0 + 84.0, y0 + 58.0);
             let sub = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
-            if today {
-                l.set_today(sub);
+            if today != 0 {
+                l.set_today(sub, today);
             }
             if clip {
                 l.clip = sub;
@@ -219,13 +245,24 @@ impl Layout {
     }
 
     /// Filas y botones del panel "Hoy".
-    fn set_today(&mut self, a: R) {
+    fn set_today(&mut self, a: R, mask: u8) {
         self.today = a;
-        self.pomo_row = R::new(a.l, a.t + 4.0, a.r, a.t + 40.0);
-        self.water_row = R::new(a.l, a.t + 44.0, a.r, a.t + 80.0);
-        self.weather_row = R::new(a.l, a.t + 84.0, a.r, a.t + 112.0);
-        self.cal_row = R::new(a.l, a.t + 114.0, a.r, a.b);
-        let b = |row: R, k: f32| R::new(row.r - 36.0 * k - 30.0, row.t + 4.0, row.r - 36.0 * k, row.b - 4.0);
+        let mut y = a.t;
+        let mut row = |on: bool, top: f32, h: f32, adv: f32| {
+            if !on {
+                return OFF;
+            }
+            let r = R::new(a.l, y + top, a.r, y + top + h);
+            y += adv;
+            r
+        };
+        self.pomo_row = row(mask & TODAY_POMO != 0, 4.0, 36.0, 40.0);
+        self.water_row = row(mask & TODAY_WATER != 0, 4.0, 36.0, 40.0);
+        self.weather_row = row(mask & TODAY_WEATHER != 0, 4.0, 28.0, 32.0);
+        self.cal_row = row(mask & TODAY_CAL != 0, 2.0, 52.0, 54.0);
+        let b = |row: R, k: f32| {
+            if row.l <= OFF.l { OFF } else { R::new(row.r - 36.0 * k - 30.0, row.t + 4.0, row.r - 36.0 * k, row.b - 4.0) }
+        };
         self.pomo_toggle = b(self.pomo_row, 1.0);
         self.pomo_reset = b(self.pomo_row, 0.0);
         self.water_sub = b(self.water_row, 1.0);

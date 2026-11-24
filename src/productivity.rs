@@ -3,8 +3,6 @@
 use nanoserde::{DeJson, SerJson};
 use std::time::{Duration, Instant};
 
-pub const FOCUS: Duration = Duration::from_secs(25 * 60);
-pub const BREAK: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mode {
@@ -12,9 +10,11 @@ pub enum Mode {
     Break,
 }
 
-/// Temporizador Pomodoro: 25 min de foco, 5 de descanso.
+/// Temporizador Pomodoro: foco y descanso configurables (por defecto 25 / 5 min).
 pub struct Pomodoro {
     pub mode: Mode,
+    focus: Duration,
+    brk: Duration,
     /// Cuándo termina si está corriendo.
     end_at: Option<Instant>,
     /// Lo que queda si está en pausa.
@@ -22,8 +22,23 @@ pub struct Pomodoro {
 }
 
 impl Pomodoro {
-    pub fn new() -> Self {
-        Self { mode: Mode::Focus, end_at: None, left: FOCUS }
+    pub fn new(focus_min: u32, break_min: u32) -> Self {
+        let focus = Duration::from_secs(focus_min as u64 * 60);
+        Self { mode: Mode::Focus, focus, brk: Duration::from_secs(break_min as u64 * 60), end_at: None, left: focus }
+    }
+
+    /// Cambia las duraciones. Si no se estaba usando, arranca de cero con la nueva.
+    pub fn set_durations(&mut self, focus_min: u32, break_min: u32) {
+        let untouched = !self.touched();
+        self.focus = Duration::from_secs(focus_min as u64 * 60);
+        self.brk = Duration::from_secs(break_min as u64 * 60);
+        if untouched {
+            self.left = self.total();
+        }
+    }
+
+    pub fn minutes(&self, m: Mode) -> u64 {
+        (if m == Mode::Focus { self.focus } else { self.brk }).as_secs() / 60
     }
 
     pub fn running(&self) -> bool {
@@ -36,7 +51,7 @@ impl Pomodoro {
     }
 
     pub fn total(&self) -> Duration {
-        if self.mode == Mode::Focus { FOCUS } else { BREAK }
+        if self.mode == Mode::Focus { self.focus } else { self.brk }
     }
 
     pub fn remaining(&self) -> Duration {
@@ -56,7 +71,7 @@ impl Pomodoro {
     pub fn reset(&mut self) {
         self.mode = Mode::Focus;
         self.end_at = None;
-        self.left = FOCUS;
+        self.left = self.focus;
     }
 
     /// Si terminó, pasa al siguiente modo (arrancando solo) y devuelve el modo que terminó.
