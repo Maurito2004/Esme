@@ -9,7 +9,7 @@ Bajá **Esme.exe** de la última versión en
 [Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
 arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 
-## Estado: v0.7 — Fases 1, 2, 3 y 5 completas, Fase 4 casi completa, Fase 6 en curso
+## Estado: v0.8 — Fases 1, 2, 3, 5 y 7 completas, Fase 4 casi completa, Fase 6 en curso
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -88,6 +88,15 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
   Gemini. Necesita tu propia API Key gratuita de Google AI Studio: copiala y elegí bandeja →
   Configuración → IA Gemini → Pegar API Key. Se guarda cifrada con Windows (DPAPI), atada a tu
   usuario, y viaja en un header HTTPS, nunca en la URL.
+
+**Fase 7 — optimización**
+- En reposo Esme ocupa unos **4 MB** en el Administrador de tareas (columna Memoria): a los 15 s
+  sin usarla achica su superficie de dibujo al tamaño de la píldora y le devuelve a Windows la
+  memoria que no usa. Al pasar el mouse vuelve al instante.
+- Carga diferida: el clima y el calendario se cargan al abrir "Hoy"; las tasas de cambio, al abrir
+  Ask Esme; el OCR, al usarlo.
+- Las carátulas se guardan ya achicadas al tamaño en que se dibujan.
+- Esme.exe pesa unos 600 KB.
 
 ## Estilos al expandir
 

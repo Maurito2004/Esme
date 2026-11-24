@@ -3,13 +3,31 @@
 use crate::*;
 
 impl App {
+    /// Canal compartido inicializado de forma diferida (0 asignaciones al arrancar).
+    pub(crate) fn inbox_slot(&mut self) -> Arc<Mutex<DataInbox>> {
+        self.inbox.get_or_insert_with(|| Arc::new(Mutex::new(DataInbox::default()))).clone()
+    }
+
+    /// Carga diferida de clima y calendario: recién la primera vez que se abre el panel "Hoy".
+    pub(crate) fn ensure_today_loaded(&mut self) {
+        if self.today_loaded {
+            return;
+        }
+        self.today_loaded = true;
+        self.weather_msg = "Buscando el clima…".into();
+        self.refresh_data();
+        unsafe {
+            SetTimer(Some(self.hwnd), T_DATA, DATA_REFRESH_MS, None);
+        }
+    }
+
     /// Pide clima y calendario en hilos de fondo (no bloquea la UI).
     pub(crate) fn refresh_data(&mut self) {
         let hwnd = self.hwnd.0 as isize;
         let post = move || unsafe {
             let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_DATA, WPARAM(0), LPARAM(0));
         };
-        let inbox = self.inbox.clone();
+        let inbox = self.inbox_slot();
         std::thread::spawn(move || {
             unsafe {
                 let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
@@ -21,18 +39,9 @@ impl App {
             inbox.lock().unwrap().weather = Some(res);
             post();
         });
-        if !self.rates.is_fresh() {
-            let inbox = self.inbox.clone();
-            std::thread::spawn(move || {
-                if let Some(r) = calc::refresh_rates_if_needed() {
-                    inbox.lock().unwrap().rates = Some(r);
-                    post();
-                }
-            });
-        }
         let url = self.cfg.ical_url.clone();
         if !url.is_empty() {
-            let inbox = self.inbox.clone();
+            let inbox = self.inbox_slot();
             std::thread::spawn(move || {
                 let res = ical::fetch(&url);
                 inbox.lock().unwrap().events = Some(res);
@@ -45,7 +54,8 @@ impl App {
     }
 
     pub(crate) fn on_data(&mut self) {
-        let mut inbox = std::mem::take(&mut *self.inbox.lock().unwrap());
+        let Some(slot) = self.inbox.as_ref() else { return };
+        let mut inbox = std::mem::take(&mut *slot.lock().unwrap());
         if let Some(w) = inbox.weather.take() {
             match w {
                 Ok(w) => {
@@ -65,7 +75,7 @@ impl App {
             }
         }
         if let Some(r) = inbox.rates.take() {
-            self.rates = r;
+            self.rates = Some(r);
         }
         if self.today_on || self.ask_on {
             self.refresh();
@@ -169,7 +179,11 @@ impl App {
         self.cfg.ical_url = url.to_string();
         let _ = self.cfg.save();
         self.cal_msg = "Cargando calendario…".into();
+        self.today_loaded = true;
         self.refresh_data();
+        unsafe {
+            SetTimer(Some(self.hwnd), T_DATA, DATA_REFRESH_MS, None);
+        }
         self.show_toast("Calendario conectado ✓".into(), 2500);
     }
 }

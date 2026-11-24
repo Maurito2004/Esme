@@ -24,8 +24,10 @@ pub struct MediaInfo {
     pub position: f64,
     pub stamp: i64,
     pub duration: f64,
-    pub thumb: Option<Arc<Vec<u8>>>,
-    /// Cambia cada vez que cambia la carátula.
+    /// Bytes crudos de la carátula SOLO cuando llega una nueva: el renderer los escala a 64×64
+    /// y los descarta inmediatamente con `.take()` para no retener PNG/JPG en RAM.
+    pub thumb: Option<Vec<u8>>,
+    /// Cambia cada vez que cambia la carátula (0 = sin carátula).
     pub thumb_id: u64,
     pub can_prev: bool,
     pub can_next: bool,
@@ -47,6 +49,8 @@ impl MediaInfo {
 
 pub enum Cmd {
     Refresh { thumb: bool },
+    /// Vuelve a mandar la carátula aunque sea la misma (p. ej. se recreó el renderer).
+    ResendThumb,
     PlayPause,
     Next,
     Prev,
@@ -91,10 +95,18 @@ pub fn start(hwnd: HWND) -> (Sender<Cmd>, Shared) {
             let mut session: Option<GlobalSystemMediaTransportControlsSession> = None;
             let mut tokens: Vec<i64> = Vec::new();
             let mut last_key = String::new();
+            let mut last_thumb_hash = 0u64;
             let mut thumb_id = 0u64;
             let _ = tx2.send(Cmd::Refresh { thumb: true });
 
             while let Ok(cmd) = rx.recv() {
+                let cmd = match cmd {
+                    Cmd::ResendThumb => {
+                        last_thumb_hash = 0;
+                        Cmd::Refresh { thumb: true }
+                    }
+                    c => c,
+                };
                 match cmd {
                     Cmd::Refresh { thumb } => {
                         // ¿Cambió la sesión actual? Re-suscribimos sus eventos.
@@ -115,10 +127,22 @@ pub fn start(hwnd: HWND) -> (Sender<Cmd>, Shared) {
                             session = current;
                         }
                         let got = session.as_ref().and_then(|s| {
-                            read_info(s, thumb || changed, &mut last_key, &mut thumb_id, &sh).ok()
+                            read_info(s, thumb || changed, &mut last_key, &mut last_thumb_hash, &mut thumb_id, &sh).ok()
                         });
                         let new_track = got.as_ref().map(|g| g.1).unwrap_or(false);
-                        *sh.lock().unwrap() = got.map(|g| g.0);
+                        {
+                            let mut guard = sh.lock().unwrap();
+                            let mut next = got.map(|g| g.0);
+                            // Si la interfaz todavía no tomó la carátula anterior y esta lectura
+                            // trae la misma (thumb_id igual, sin bytes), la conservamos: si no,
+                            // se perdería y el notch quedaría sin carátula hasta la próxima canción.
+                            if let (Some(old), Some(new)) = (guard.as_mut(), next.as_mut()) {
+                                if new.thumb.is_none() && new.thumb_id == old.thumb_id {
+                                    new.thumb = old.thumb.take();
+                                }
+                            }
+                            *guard = next;
+                        }
                         notify();
                         if new_track {
                             // La miniatura del video nuevo a veces llega tarde: revisamos de nuevo.
@@ -177,15 +201,33 @@ fn unsubscribe(s: &GlobalSystemMediaTransportControlsSession, tokens: &[i64]) {
     }
 }
 
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    if h == 0 { 1 } else { h }
+}
+
 fn read_info(
     s: &GlobalSystemMediaTransportControlsSession,
     want_thumb: bool,
     last_key: &mut String,
+    last_thumb_hash: &mut u64,
     thumb_id: &mut u64,
     shared: &Shared,
 ) -> Result<(MediaInfo, bool)> {
-    let prev = shared.lock().unwrap().clone();
-    // Avisos de solo posición/estado: reusamos título y carátula (pedirlos es lo caro).
+    // Clonamos solo metadatos livianos (sin bytes de imagen) para evitar duplicar buffers.
+    let prev = shared.lock().unwrap().as_ref().map(|p| MediaInfo {
+        title: p.title.clone(),
+        artist: p.artist.clone(),
+        album: p.album.clone(),
+        thumb: None,
+        thumb_id: p.thumb_id,
+        ..Default::default()
+    });
+    // Avisos de solo posición/estado: reusamos título y thumb_id (pedirlos es lo caro).
     let props = match (&prev, want_thumb) {
         (Some(_), false) => None,
         _ => Some(s.TryGetMediaPropertiesAsync()?.get()?),
@@ -197,10 +239,7 @@ fn read_info(
             album: props.AlbumTitle().map(|h| h.to_string()).unwrap_or_default(),
             ..Default::default()
         },
-        None => {
-            let p = prev.clone().unwrap();
-            MediaInfo { title: p.title, artist: p.artist, album: p.album, thumb: p.thumb, thumb_id: p.thumb_id, ..Default::default() }
-        }
+        None => prev.clone().unwrap(),
     };
 
     if let Ok(pb) = s.GetPlaybackInfo() {
@@ -225,28 +264,24 @@ fn read_info(
         info.stamp = now_filetime();
     }
 
-    // Carátula: se relee en cada aviso de "cambió el contenido" (Brave/YouTube a veces cambian la
-    // miniatura sin cambiar el título, o la mandan tarde). Solo se re-decodifica si los bytes cambian.
+    // Carátula: comparamos con hash FNV-1a sin retener el Vec<u8> original en memoria.
     let key = format!("{}\u{1}{}\u{1}{}", info.title, info.artist, info.album);
     let Some(props) = props else { return Ok((info, false)) };
     let changed_track = key != *last_key;
     *last_key = key;
     let fresh = read_thumb(&props).ok().flatten();
-    let same_bytes = match (&fresh, prev.as_ref().and_then(|p| p.thumb.as_ref())) {
-        (Some(a), Some(b)) => a.as_slice() == b.as_slice(),
-        _ => false,
-    };
+    let fresh_hash = fresh.as_deref().map(fnv1a_64).unwrap_or(0);
+    let same_bytes = fresh_hash != 0 && fresh_hash == *last_thumb_hash;
     if !changed_track && (same_bytes || fresh.is_none()) {
-        // Misma canción y misma miniatura (o todavía no llegó la nueva): mantenemos la actual.
+        // Misma canción y misma miniatura (o todavía no llegó): mantenemos el ID actual sin reenviar bytes.
         if let Some(p) = prev {
-            info.thumb = p.thumb;
             info.thumb_id = p.thumb_id;
         }
     } else {
-        // Canción nueva o miniatura nueva: nunca mostramos la anterior (sin imagen, va el ícono).
-        info.thumb = fresh.map(Arc::new);
-        *thumb_id += 1;
-        info.thumb_id = *thumb_id;
+        *last_thumb_hash = fresh_hash;
+        info.thumb = fresh;
+        *thumb_id = thumb_id.wrapping_add(1).max(1);
+        info.thumb_id = if info.thumb.is_some() { *thumb_id } else { 0 };
     }
     Ok((info, changed_track))
 }
@@ -280,7 +315,7 @@ fn run_cmd(s: &GlobalSystemMediaTransportControlsSession, cmd: Cmd) -> Result<()
             let start = s.GetTimelineProperties().and_then(|t| t.StartTime()).map(|t| t.Duration).unwrap_or(0);
             s.TryChangePlaybackPositionAsync(start + (secs * 1e7) as i64)?.get()?;
         }
-        Cmd::Refresh { .. } => {}
+        Cmd::Refresh { .. } | Cmd::ResendThumb => {}
     }
     Ok(())
 }

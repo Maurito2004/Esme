@@ -101,9 +101,7 @@ impl App {
                     self.refresh();
                 }
             }
-            T_TRIM if !self.is_animating() => unsafe {
-                let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
-            },
+            T_TRIM => self.on_idle_trim(),
             T_PROGRESS => self.refresh(),
             T_LYRIC => {
                 self.schedule_lyric();
@@ -129,8 +127,11 @@ impl App {
             T_POMO => self.on_pomo_tick(),
             T_QTIMER => self.on_quick_timer_tick(),
             T_CARET => {
-                if self.ask_on && self.ask.focus {
-                    self.ask.caret_visible = !self.ask.caret_visible;
+                let focused = self.ask_on && self.ask.as_ref().map(|a| a.focus).unwrap_or(false);
+                if focused {
+                    if let Some(ask) = self.ask.as_mut() {
+                        ask.caret_visible = !ask.caret_visible;
+                    }
                     self.refresh();
                 } else {
                     unsafe {
@@ -161,7 +162,9 @@ impl App {
             }
             T_COPIED => {
                 self.clip_copied = None;
-                self.ask.copied_feedback = false;
+                if let Some(ask) = self.ask.as_mut() {
+                    ask.copied_feedback = false;
+                }
                 self.refresh();
             }
             T_HOVERCHECK => {
@@ -230,7 +233,7 @@ impl App {
             if GetCursorPos(&mut p).is_err() || GetWindowRect(self.hwnd, &mut wr).is_err() {
                 return;
             }
-            let ex = wr.left as f32 + (CANVAS_W / 2.0 + self.sw.value / 2.0 - 40.0) * self.scale;
+            let ex = wr.left as f32 + (self.surface_cx() + self.sw.value / 2.0 - 40.0) * self.scale;
             let ey = wr.top as f32 + 16.0 * self.scale;
             let (dx, dy) = (p.x as f32 - ex, p.y as f32 - ey);
             let dist = (dx * dx + dy * dy).sqrt().max(1.0);

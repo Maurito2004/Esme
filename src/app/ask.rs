@@ -1,5 +1,5 @@
 //! Comportamiento de Fase 6 (Ask Esme, Traductor Rápido, Calculadora/Conversor Inline,
-//! Temporizador Rápido y acciones de portapapeles con IA).
+//! Temporizador Rápido y acciones de portapapeles con IA), con inicialización diferida (Fase 7).
 
 use crate::ask_esme::{self, PromptTask};
 use crate::calc::{self, InlineAction};
@@ -11,12 +11,41 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 
 const CARET_BLINK_MS: u32 = 530;
 
+
 impl App {
+    /// Inicializa `AskState` de forma diferida (solo al abrir Ask Esme por primera vez).
+    pub(crate) fn ask_mut(&mut self) -> &mut ask_esme::AskState {
+        self.ask.get_or_insert_with(ask_esme::AskState::default)
+    }
+
+    /// Carga tasas de divisas desde caché local la primera vez que se abre Ask Esme
+    /// y las refresca en segundo plano (máx. 1 vez/día) si vencieron.
+    fn ensure_rates(&mut self) {
+        if self.rates.is_none() {
+            self.rates = Some(calc::RatesCache::load());
+        }
+        let needs_refresh = self.rates.as_ref().map(|r| !r.is_fresh()).unwrap_or(false);
+        if needs_refresh {
+            let hwnd = self.hwnd.0 as isize;
+            let inbox = self.inbox_slot();
+            std::thread::spawn(move || {
+                if let Some(r) = calc::refresh_rates_if_needed() {
+                    inbox.lock().unwrap().rates = Some(r);
+                    unsafe {
+                        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_DATA, WPARAM(0), LPARAM(0));
+                    }
+                }
+            });
+        }
+    }
+
     /// Abre o cierra Ask Esme (desde `Ctrl+Alt+Space`, bandeja o botón del panel).
     pub(crate) fn toggle_ask(&mut self, force_open: bool) {
         let open = if force_open { true } else { !self.ask_on };
         self.ask_on = open;
         if open {
+            let _ = self.ask_mut();
+            self.ensure_rates();
             self.lyrics_on = false;
             self.clip_on = false;
             self.shelf_on = false;
@@ -32,8 +61,17 @@ impl App {
     /// Activa o desactiva el foco de teclado sobre la ventana del notch y el cursor parpadeante.
     /// Solo cuando el input tiene foco quitamos temporalmente `WS_EX_NOACTIVATE` y encendemos `T_CARET`.
     pub(crate) fn focus_ask_input(&mut self, focus: bool) {
-        self.ask.focus = focus;
-        self.ask.caret_visible = focus;
+        if let Some(ask) = self.ask.as_mut() {
+            ask.focus = focus;
+            ask.caret_visible = focus;
+            if !focus {
+                ask.selected_all = false;
+            }
+        } else if focus {
+            let ask = self.ask_mut();
+            ask.focus = true;
+            ask.caret_visible = true;
+        }
         unsafe {
             let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
             if focus {
@@ -42,7 +80,6 @@ impl App {
                 let _ = SetFocus(Some(self.hwnd));
                 SetTimer(Some(self.hwnd), T_CARET, CARET_BLINK_MS, None);
             } else {
-                self.ask.selected_all = false;
                 let _ = KillTimer(Some(self.hwnd), T_CARET);
                 SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex | (WS_EX_NOACTIVATE.0 as isize));
             }
@@ -51,7 +88,9 @@ impl App {
 
     /// Vista previa inline en vivo mientras el usuario escribe (`= 4725`, `= 118000.00 ARS`, `⏱ Enter: 10 min`).
     pub(crate) fn ask_inline_preview(&self) -> Option<String> {
-        match calc::evaluate_input(&self.ask.input, &self.rates) {
+        let ask = self.ask.as_ref()?;
+        let rates = self.rates.as_ref()?;
+        match calc::evaluate_input(&ask.input, rates) {
             Some(InlineAction::InstantResult(res)) => Some(format!(" {res}")),
             Some(InlineAction::QuickTimer(_, label)) => Some(format!("⏱ Enter → {label}")),
             None => None,
@@ -60,7 +99,7 @@ impl App {
 
     /// Teclas especiales en el cuadro de texto Direct2D (`Tab`, `Enter`, `Esc`, `Backspace`, `Ctrl+V/C/A`).
     pub(crate) fn on_key_down(&mut self, vk: u32) {
-        if !self.ask_on || !self.ask.focus {
+        if !self.ask_on || !self.ask.as_ref().map(|a| a.focus).unwrap_or(false) {
             return;
         }
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 };
@@ -68,35 +107,49 @@ impl App {
             match vk as u8 {
                 b'V' => {
                     if let Some(clip_txt) = clipboard::read_text(self.hwnd) {
-                        if self.ask.selected_all {
-                            self.ask.input.clear();
-                            self.ask.selected_all = false;
+                        let ask = self.ask_mut();
+                        if ask.selected_all {
+                            ask.input.clear();
+                            ask.selected_all = false;
                         }
                         let clean: String = clip_txt
                             .chars()
                             .map(|c| if c == '\n' || c == '\r' || c.is_control() { ' ' } else { c })
                             .take(300)
                             .collect();
-                        self.ask.input.push_str(clean.trim());
+                        ask.input.push_str(clean.trim());
                         self.reset_caret_blink();
                         self.refresh();
                     }
                     return;
                 }
                 b'A' => {
-                    if !self.ask.input.is_empty() {
-                        self.ask.selected_all = true;
+                    let changed = if let Some(ask) = self.ask.as_mut() {
+                        if !ask.input.is_empty() {
+                            ask.selected_all = true;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if changed {
                         self.refresh();
                     }
                     return;
                 }
                 b'C' => {
-                    let target = if self.ask.selected_all && !self.ask.input.is_empty() {
-                        self.ask.input.clone()
-                    } else if !self.ask.response.is_empty() {
-                        self.ask.response.clone()
+                    let target = if let Some(ask) = self.ask.as_ref() {
+                        if ask.selected_all && !ask.input.is_empty() {
+                            ask.input.clone()
+                        } else if !ask.response.is_empty() {
+                            ask.response.clone()
+                        } else {
+                            ask.input.clone()
+                        }
                     } else {
-                        self.ask.input.clone()
+                        String::new()
                     };
                     if !target.is_empty() && clipboard::set_text(self.hwnd, &target) {
                         self.trigger_ask_copied();
@@ -109,7 +162,8 @@ impl App {
 
         match vk as u16 {
             x if x == VK_TAB.0 => {
-                self.ask.mode = self.ask.mode.toggle();
+                let ask = self.ask_mut();
+                ask.mode = ask.mode.toggle();
                 self.reset_caret_blink();
                 self.refresh();
             }
@@ -117,11 +171,12 @@ impl App {
                 self.toggle_ask(false);
             }
             x if x == VK_BACK.0 => {
-                if self.ask.selected_all {
-                    self.ask.input.clear();
-                    self.ask.selected_all = false;
+                let ask = self.ask_mut();
+                if ask.selected_all {
+                    ask.input.clear();
+                    ask.selected_all = false;
                 } else {
-                    self.ask.input.pop();
+                    ask.input.pop();
                 }
                 self.reset_caret_blink();
                 self.refresh();
@@ -135,26 +190,36 @@ impl App {
 
     /// Entrada de caracteres Unicode (`WM_CHAR`) en el cuadro de texto Direct2D.
     pub(crate) fn on_char(&mut self, ch: u32) {
-        if !self.ask_on || !self.ask.focus {
+        if !self.ask_on || !self.ask.as_ref().map(|a| a.focus).unwrap_or(false) {
             return;
         }
         let Some(c) = char::from_u32(ch) else { return };
         if c.is_control() {
             return;
         }
-        if self.ask.selected_all {
-            self.ask.input.clear();
-            self.ask.selected_all = false;
-        }
-        if self.ask.input.chars().count() < 320 {
-            self.ask.input.push(c);
+        let pushed = {
+            let ask = self.ask_mut();
+            if ask.selected_all {
+                ask.input.clear();
+                ask.selected_all = false;
+            }
+            if ask.input.chars().count() < 320 {
+                ask.input.push(c);
+                true
+            } else {
+                false
+            }
+        };
+        if pushed {
             self.reset_caret_blink();
             self.refresh();
         }
     }
 
     fn reset_caret_blink(&mut self) {
-        self.ask.caret_visible = true;
+        if let Some(ask) = self.ask.as_mut() {
+            ask.caret_visible = true;
+        }
         unsafe {
             SetTimer(Some(self.hwnd), T_CARET, CARET_BLINK_MS, None);
         }
@@ -165,35 +230,43 @@ impl App {
     /// 2. Si es `timer 10m`, inicia el temporizador rápido sin tocar la red.
     /// 3. Si es consulta o traducción, dispara el hilo `WinHTTP` contra Gemini.
     pub(crate) fn submit_ask_input(&mut self) {
-        let text = self.ask.input.trim().to_string();
+        let Some((text, mode)) = self.ask.as_ref().map(|a| (a.input.trim().to_string(), a.mode)) else {
+            return;
+        };
         if text.is_empty() {
             return;
         }
-        if let Some(action) = calc::evaluate_input(&text, &self.rates) {
-            match action {
-                InlineAction::InstantResult(res) => {
-                    let _ = clipboard::set_text(self.hwnd, &res);
-                    self.ask.loading = false;
-                    self.ask.response = format!("{text} {res}  (copiado al portapapeles)");
-                    self.retarget();
-                    self.refresh();
-                    return;
-                }
-                InlineAction::QuickTimer(secs, label) => {
-                    self.start_quick_timer(secs, label);
-                    self.ask.input.clear();
-                    self.toggle_ask(false);
-                    return;
+        self.ensure_rates();
+        if let Some(rates) = self.rates.as_ref() {
+            if let Some(action) = calc::evaluate_input(&text, rates) {
+                match action {
+                    InlineAction::InstantResult(res) => {
+                        let _ = clipboard::set_text(self.hwnd, &res);
+                        let ask = self.ask_mut();
+                        ask.loading = false;
+                        ask.response = format!("{text} {res}  (copiado al portapapeles)");
+                        self.retarget();
+                        self.refresh();
+                        return;
+                    }
+                    InlineAction::QuickTimer(secs, label) => {
+                        self.start_quick_timer(secs, label);
+                        if let Some(ask) = self.ask.as_mut() {
+                            ask.input.clear();
+                        }
+                        self.toggle_ask(false);
+                        return;
+                    }
                 }
             }
         }
-        self.run_gemini_task(PromptTask::Mode(self.ask.mode), text);
+        self.run_gemini_task(PromptTask::Mode(mode), text);
     }
 
     /// Botones rápidos sobre el último texto del portapapeles ("✨ Resumir clip" y "✎ Corregir").
     pub(crate) fn run_clip_ai_action(&mut self, summarize: bool) {
         let Some(last) = self.clip.items.first().cloned().or_else(|| clipboard::read_text(self.hwnd)) else {
-            self.ask.response = "El portapapeles está vacío: copiá un texto primero.".into();
+            self.ask_mut().response = "El portapapeles está vacío: copiá un texto primero.".into();
             self.retarget();
             self.refresh();
             return;
@@ -208,46 +281,54 @@ impl App {
 
     fn run_gemini_task(&mut self, task: PromptTask, user_text: String) {
         let Some(api_key) = self.cfg.gemini_api_key() else {
-            self.ask.loading = false;
-            self.ask.response = "Copiá tu API Key de Gemini y elegí Bandeja → Configuración → IA Gemini → Pegar API Key.".into();
+            let ask = self.ask_mut();
+            ask.loading = false;
+            ask.response = "Copiá tu API Key de Gemini y elegí Bandeja → Configuración → IA Gemini → Pegar API Key.".into();
             self.retarget();
             self.refresh();
             return;
         };
-        self.ask.req_id = self.ask.req_id.wrapping_add(1);
-        self.ask.loading = true;
-        self.ask.copied_feedback = false;
+        let (req_id, shared) = {
+            let ask = self.ask_mut();
+            ask.req_id = ask.req_id.wrapping_add(1);
+            ask.loading = true;
+            ask.copied_feedback = false;
+            (ask.req_id, ask.shared.clone())
+        };
         self.retarget();
         self.refresh();
         ask_esme::spawn_query(
             self.hwnd,
-            self.ask.req_id,
+            req_id,
             api_key,
             self.cfg.gemini_model.clone(),
             task,
             user_text,
-            self.ask.shared.clone(),
+            shared,
         );
     }
 
     /// Recepción de `WM_ASK_DONE` desde el hilo de WinHTTP.
     pub(crate) fn on_ask_done(&mut self) {
-        let res = self.ask.shared.lock().unwrap().take();
+        let res = self.ask.as_ref().and_then(|a| a.shared.lock().unwrap().take());
         let Some((id, outcome)) = res else { return };
-        if id != self.ask.req_id {
+        let Some(ask) = self.ask.as_mut() else { return };
+        if id != ask.req_id {
             return;
         }
-        self.ask.loading = false;
+        ask.loading = false;
         match outcome {
-            Ok(txt) => self.ask.response = txt,
-            Err(err) => self.ask.response = err,
+            Ok(txt) => ask.response = txt,
+            Err(err) => ask.response = err,
         }
         self.retarget();
         self.refresh();
     }
 
     pub(crate) fn trigger_ask_copied(&mut self) {
-        self.ask.copied_feedback = true;
+        if let Some(ask) = self.ask.as_mut() {
+            ask.copied_feedback = true;
+        }
         unsafe {
             SetTimer(Some(self.hwnd), T_COPIED, 1100, None);
         }

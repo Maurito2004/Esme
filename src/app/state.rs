@@ -69,8 +69,10 @@ impl App {
         }
         if self.ask_on {
             d.h += ui::ASK_BASE_EXTRA;
-            if self.ask.loading || !self.ask.response.is_empty() {
-                d.h += ui::ASK_RESP_EXTRA;
+            if let Some(ask) = self.ask.as_ref() {
+                if ask.loading || !ask.response.is_empty() {
+                    d.h += ui::ASK_RESP_EXTRA;
+                }
             }
             d.w = d.w.max(430.0);
         }
@@ -98,7 +100,7 @@ impl App {
 
     pub(crate) fn layout_now(&self) -> Layout {
         Layout::new(
-            CANVAS_W / 2.0,
+            self.surface_cx(),
             self.content_top(),
             self.expanded_dims(),
             self.has_media(),
@@ -168,8 +170,15 @@ impl App {
         }
         let open = self.want_expanded();
         let shape = if open && !self.cfg.transparente { self.expanded_dims() } else { self.collapsed_dims() };
-        if (self.expand.target > 0.5) != open {
-            self.trim_pending = true; // recortamos memoria solo tras animaciones de hover
+        // Si vamos a expandir o la forma requerida excede la superficie compacta actual, agrandamos
+        // el swapchain ANTES del primer frame para que no haya cortes ni parpadeo.
+        let need_full = open || shape.w + 32.0 > self.surf_w || shape.h + 8.0 > self.surf_h;
+        if need_full {
+            self.cancel_trim();
+            self.ensure_surface(true);
+        }
+        if !open {
+            self.trim_pending = true;
         }
         self.sw.set_target(shape.w);
         self.sh.set_target(shape.h);
@@ -194,7 +203,12 @@ impl App {
         self.redraw_with(true);
         if !self.is_animating() && self.trim_pending {
             self.trim_pending = false;
-            self.schedule_trim();
+            if !self.want_expanded() {
+                // Al terminar de contraerse, compactamos la superficie gráfica y programamos
+                // el Working Set Trim a 15 s de reposo absoluto.
+                self.ensure_surface(false);
+                self.schedule_trim();
+            }
         }
     }
 }

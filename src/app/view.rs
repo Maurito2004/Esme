@@ -5,20 +5,71 @@ use crate::*;
 impl App {
     // ---------- Ventana y dibujo ----------
 
-    /// Ubica la ventana arriba al centro del monitor principal y ajusta el lienzo al DPI.
+    /// Centro horizontal actual de la superficie gráfica en DIPs.
+    #[inline]
+    pub(crate) fn surface_cx(&self) -> f32 {
+        self.surf_w / 2.0
+    }
+
+    /// Calcula el tamaño objetivo de la superficie gráfica (compacta cuando está contraído,
+    /// completa `CANVAS_W × CANVAS_H` al expandir o animar).
+    fn target_surface_dips(&self, full: bool) -> (f32, f32) {
+        if full {
+            (CANVAS_W, CANVAS_H)
+        } else {
+            let c = self.collapsed_dims();
+            // Margen exacto para orejas cóncavas + borde de 1.5 DIP sin reservar 520×340 en VRAM.
+            let w = (c.w + 36.0).clamp(180.0, CANVAS_W);
+            let h = (c.h + 14.0).clamp(24.0, CANVAS_H);
+            (w, h)
+        }
+    }
+
+    /// Ubica la ventana arriba al centro del monitor activo y ajusta la superficie al DPI.
     pub(crate) fn layout(&mut self) {
+        let full = self.want_expanded() || self.is_animating();
+        self.apply_surface_layout(full, true);
+    }
+
+    /// Cambia dinámicamente el tamaño del HWND + DXGI swapchain entre modo compacto (reposo)
+    /// y modo completo (expandido/animación).
+    pub(crate) fn ensure_surface(&mut self, full: bool) {
+        let (tw, th) = self.target_surface_dips(full);
+        let unchanged = (self.surf_w - tw).abs() < 0.5 && (self.surf_h - th).abs() < 0.5 && self.surf_compact == !full;
+        if unchanged && self.renderer.is_some() {
+            return;
+        }
+        self.apply_surface_layout(full, false);
+        if !full {
+            // Re-dibujamos 1 frame limpio en el nuevo tamaño compacto (0% parpadeo).
+            self.redraw();
+        }
+    }
+
+    fn apply_surface_layout(&mut self, full: bool, force_dpi: bool) {
         unsafe {
             let mon = self.monitor;
             let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
             let _ = GetMonitorInfoW(mon, &mut mi);
-            let (mut dx, mut dy) = (96u32, 96u32);
-            let _ = GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-            self.scale = dx as f32 / 96.0;
-            self.win_w = (CANVAS_W * self.scale).ceil() as i32;
-            self.win_h = (CANVAS_H * self.scale).ceil() as i32;
+            if force_dpi || self.scale <= 0.0 {
+                let (mut dx, mut dy) = (96u32, 96u32);
+                let _ = GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
+                self.scale = (dx as f32 / 96.0).max(0.5);
+            }
+            let (tw, th) = self.target_surface_dips(full);
+            self.surf_w = tw;
+            self.surf_h = th;
+            self.surf_compact = !full;
+            self.win_w = (tw * self.scale).ceil() as i32;
+            self.win_h = (th * self.scale).ceil() as i32;
             let r = mi.rcMonitor;
             let x = r.left + ((r.right - r.left) - self.win_w) / 2;
-            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, r.top, self.win_w, self.win_h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            let flags = if self.hidden {
+                SWP_NOACTIVATE
+            } else {
+                SWP_NOACTIVATE | SWP_SHOWWINDOW
+            };
+            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, r.top, self.win_w, self.win_h, flags);
 
             if let Some(rd) = self.renderer.as_mut() {
                 if rd.resize(self.win_w as u32, self.win_h as u32, self.scale).is_err() {
@@ -33,16 +84,18 @@ impl App {
     }
 
     pub(crate) fn create_renderer(&mut self) {
-        self.renderer = Renderer::new(self.hwnd, self.win_w as u32, self.win_h as u32, self.scale).ok();
-        if let (Some(r), Some(m)) = (self.renderer.as_mut(), self.media.as_ref()) {
-            r.set_art(m.thumb.clone());
+        self.renderer = Renderer::new(self.hwnd, self.win_w.max(1) as u32, self.win_h.max(1) as u32, self.scale).ok();
+        // Si había carátula activa y se perdió el dispositivo GPU, pedimos re-lectura puntual a SMTC
+        // (nunca retenemos el Vec<u8> original en RAM).
+        if self.renderer.is_some() && self.media.as_ref().map(|m| m.thumb_id != 0).unwrap_or(false) {
+            let _ = self.media_tx.send(Cmd::ResendThumb);
         }
     }
 
     /// La región de la ventana sigue a lo visible: fuera de ella los clics y el hover
     /// pasan a las ventanas de abajo.
     pub(crate) fn update_region(&mut self, shape_w: f32, shape_h: f32, ear: f32) {
-        let cx = CANVAS_W / 2.0;
+        let cx = self.surface_cx();
         let mut l = cx - shape_w / 2.0 - ear;
         let mut r = cx + shape_w / 2.0 + ear;
         let mut b = shape_h;
@@ -150,7 +203,7 @@ impl App {
         };
 
         let frame = Frame {
-            cx: CANVAS_W / 2.0,
+            cx: self.surface_cx(),
             shape_w: w,
             shape_h: h,
             radius,
@@ -182,18 +235,18 @@ impl App {
                 None
             },
             ask: if self.ask_on {
-                Some(AskView {
-                    mode_label: self.ask.mode.label(),
-                    is_translate: self.ask.mode == ask_esme::AskMode::Translate,
-                    input: &self.ask.input,
-                    placeholder: self.ask.mode.placeholder(),
-                    focused: self.ask.focus,
-                    caret_on: self.ask.caret_visible,
-                    selected_all: self.ask.selected_all,
+                self.ask.as_ref().map(|ask| AskView {
+                    mode_label: ask.mode.label(),
+                    is_translate: ask.mode == ask_esme::AskMode::Translate,
+                    input: &ask.input,
+                    placeholder: ask.mode.placeholder(),
+                    focused: ask.focus,
+                    caret_on: ask.caret_visible,
+                    selected_all: ask.selected_all,
                     inline_preview: inline_prev.as_deref(),
-                    loading: self.ask.loading,
-                    response: &self.ask.response,
-                    copied: self.ask.copied_feedback,
+                    loading: ask.loading,
+                    response: &ask.response,
+                    copied: ask.copied_feedback,
                     has_clip: !self.clip.items.is_empty(),
                 })
             } else {
@@ -282,11 +335,39 @@ impl App {
         }
     }
 
-    /// En reposo devolvemos al sistema las páginas que no se usan (sobre todo las del
-    /// driver de la GPU). Vuelven solas en la próxima animación.
+    /// Programa el recorte de memoria una sola vez tras 15 s de reposo absoluto.
     pub(crate) fn schedule_trim(&mut self) {
         unsafe {
             SetTimer(Some(self.hwnd), T_TRIM, TRIM_DELAY_MS, None);
+        }
+    }
+
+    /// Cancela el recorte pendiente si el usuario vuelve a interactuar antes de los 15 s.
+    pub(crate) fn cancel_trim(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_TRIM);
+        }
+    }
+
+    /// Ejecutado una sola vez a los 15 s de reposo absoluto:
+    /// 1) Garantiza la superficie DXGI en tamaño compacto de píldora.
+    /// 2) Libera cachés secundarios de Direct2D/WIC y ejecuta `IDXGIDevice3::Trim()`.
+    /// 3) Devuelve páginas inactivas al sistema con `SetProcessWorkingSetSizeEx`.
+    pub(crate) fn on_idle_trim(&mut self) {
+        if self.is_animating() || self.want_expanded() {
+            return;
+        }
+        self.ensure_surface(false);
+        if let Some(rd) = self.renderer.as_mut() {
+            rd.release_idle_caches();
+        }
+        unsafe {
+            let _ = SetProcessWorkingSetSizeEx(
+                GetCurrentProcess(),
+                usize::MAX,
+                usize::MAX,
+                SETPROCESSWORKINGSETSIZEEX_FLAGS(0),
+            );
         }
     }
 }

@@ -59,7 +59,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             }
             WM_KILLFOCUS => {
                 with_app(|a| {
-                    if a.ask.focus {
+                    if a.ask.as_ref().map(|x| x.focus).unwrap_or(false) {
                         a.focus_ask_input(false);
                         a.refresh();
                     }

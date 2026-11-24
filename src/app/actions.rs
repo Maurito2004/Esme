@@ -185,12 +185,14 @@ impl App {
                     self.ask_on = false;
                     self.focus_ask_input(false);
                     self.water = std::mem::take(&mut self.water).for_today();
+                    self.ensure_today_loaded();
                 }
                 self.retarget();
             }
             Btn::Ask => self.toggle_ask(false),
             Btn::AskMode => {
-                self.ask.mode = self.ask.mode.toggle();
+                let ask = self.ask_mut();
+                ask.mode = ask.mode.toggle();
                 self.focus_ask_input(true);
                 self.refresh();
             }
@@ -201,7 +203,8 @@ impl App {
             Btn::AskSummarize => self.run_clip_ai_action(true),
             Btn::AskSpellcheck => self.run_clip_ai_action(false),
             Btn::AskCopy => {
-                if !self.ask.response.is_empty() && clipboard::set_text(self.hwnd, &self.ask.response) {
+                let resp = self.ask.as_ref().map(|a| a.response.clone()).unwrap_or_default();
+                if !resp.is_empty() && clipboard::set_text(self.hwnd, &resp) {
                     self.trigger_ask_copied();
                 }
             }

@@ -46,9 +46,10 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Ole::{OleInitialize, RegisterDragDrop};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Memory::{SetProcessWorkingSetSizeEx, SETPROCESSWORKINGSETSIZEEX_FLAGS};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
-use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, SetProcessWorkingSetSize};
+use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, TrackMouseEvent, LASTINPUTINFO, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Shell::ShellExecuteW;
@@ -130,7 +131,8 @@ unsafe extern "system" fn on_win_event(
 
 const EXPAND_DELAY_MS: u32 = 90;
 const COLLAPSE_DELAY_MS: u32 = 320;
-const TRIM_DELAY_MS: u32 = 1500;
+/// 15 segundos de reposo absoluto antes de compactar superficie y devolver páginas a Windows.
+const TRIM_DELAY_MS: u32 = 15_000;
 const IDLE_CHECK_AWAKE_MS: u32 = 15_000;
 const IDLE_CHECK_ASLEEP_MS: u32 = 1_000;
 
@@ -152,10 +154,13 @@ struct App {
     hover: bool,
     pinned: bool,
     hover_btn: Option<Btn>,
-    // Ventana.
+    // Ventana y superficie gráfica dinámica (Fase 7).
     monitor: HMONITOR,
     hidden: bool,
     scale: f32,
+    surf_w: f32,
+    surf_h: f32,
+    surf_compact: bool,
     win_w: i32,
     win_h: i32,
     last_region: (i32, i32, i32),
@@ -168,12 +173,12 @@ struct App {
     media_shared: media::Shared,
     media: Option<MediaInfo>,
     progress_timer: bool,
-    // Letras.
+    // Letras (inicialización diferida de canal compartido).
     lyrics_on: bool,
     lyrics: Option<Lyrics>,
     lyrics_key: String,
     lyrics_req: u64,
-    lyrics_shared: Arc<Mutex<Option<(u64, Lyrics)>>>,
+    lyrics_shared: Option<Arc<Mutex<Option<(u64, Lyrics)>>>>,
     lyric_current: Option<usize>,
     // Portapapeles.
     clip: clipboard::History,
@@ -190,19 +195,20 @@ struct App {
     _drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     // Aviso temporal en la píldora (ej. "Texto copiado").
     toast: Option<String>,
-    // Panel "Hoy" (Fase 5).
+    // Panel "Hoy" (Fase 5 — carga diferida al abrir "Hoy" por primera vez).
     today_on: bool,
+    today_loaded: bool,
     pomo: productivity::Pomodoro,
     water: productivity::Water,
     weather: Option<weather::Weather>,
     weather_msg: String,
     events: Vec<ical::Event>,
     cal_msg: String,
-    inbox: Arc<Mutex<DataInbox>>,
-    // Fase 6: Ask Esme, Traductor Rápido, Calculadora/Conversor Inline y Temporizador Rápido.
+    inbox: Option<Arc<Mutex<DataInbox>>>,
+    // Fase 6: Ask Esme, Traductor Rápido, Calculadora/Conversor Inline (carga diferida).
     ask_on: bool,
-    ask: ask_esme::AskState,
-    rates: calc::RatesCache,
+    ask: Option<ask_esme::AskState>,
+    rates: Option<calc::RatesCache>,
     quick_timer: Option<(std::time::Instant, std::time::Duration, String)>,
     // Overlays del sistema (Fase 4).
     overlay: Option<SysOverlay>,
@@ -305,6 +311,9 @@ fn main() -> Result<()> {
             monitor: MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY),
             hidden: false,
             scale: 1.0,
+            surf_w: CANVAS_W,
+            surf_h: CANVAS_H,
+            surf_compact: false,
             win_w: 0,
             win_h: 0,
             last_region: (-1, -1, -1),
@@ -319,7 +328,7 @@ fn main() -> Result<()> {
             lyrics: None,
             lyrics_key: String::new(),
             lyrics_req: 0,
-            lyrics_shared: Arc::new(Mutex::new(None)),
+            lyrics_shared: None,
             lyric_current: None,
             clip: clipboard::History::load(),
             clip_on: false,
@@ -332,16 +341,17 @@ fn main() -> Result<()> {
             _drop_target: None,
             toast: None,
             today_on: false,
+            today_loaded: false,
             pomo: productivity::Pomodoro::new(),
             water: productivity::Water::load(),
             weather: None,
-            weather_msg: "Buscando el clima…".into(),
+            weather_msg: "Abrí «Hoy» para cargar el clima".into(),
             events: Vec::new(),
             cal_msg: String::new(),
-            inbox: Arc::new(Mutex::new(DataInbox::default())),
+            inbox: None,
             ask_on: false,
-            ask: ask_esme::AskState::default(),
-            rates: calc::RatesCache::load(),
+            ask: None,
+            rates: None,
             quick_timer: None,
             overlay: None,
             level: Spring::new(0.0, 320.0, 0.05).with_eps(0.002),
@@ -414,11 +424,8 @@ fn main() -> Result<()> {
         ] {
             let _ = windows::Win32::System::Power::RegisterPowerSettingNotification(HANDLE(hwnd.0), &guid, DEVICE_NOTIFY_WINDOW_HANDLE);
         }
-        // Clima y calendario: primera carga ahora y después cada una hora.
-        with_app(|a| {
-            a.refresh_data();
-            SetTimer(Some(a.hwnd), T_DATA, DATA_REFRESH_MS, None);
-        });
+        // Clima, calendario y tasas de cambio: carga 100% diferida (Fase 7) al abrir "Hoy" o "Ask Esme"
+        // por primera vez, evitando inicializar WinRT Geolocation y WinHTTP/TLS al arrancar Esme.exe.
         with_app(|a| {
             a.audio = audio;
             a.shell_msg = shell_msg;

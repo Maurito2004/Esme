@@ -146,6 +146,7 @@ struct Fonts {
 }
 
 pub struct Renderer {
+    dxgi_device: IDXGIDevice,
     swap: IDXGISwapChain1,
     d2d_factory: ID2D1Factory1,
     ctx: ID2D1DeviceContext,
@@ -153,14 +154,16 @@ pub struct Renderer {
     _target: IDCompositionTarget,
     _visual: IDCompositionVisual,
     fonts: Fonts,
+    /// Fábrica WIC inicializada de forma diferida (solo al decodificar carátulas) y liberada en reposo.
     wic: Option<IWICImagingFactory>,
     art: Option<ID2D1Bitmap1>,
-    /// Carátula anterior, para el fundido al cambiar de canción.
+    /// Carátula anterior, para el fundido al cambiar de canción (se libera al terminar el fade).
     prev_art: Option<ID2D1Bitmap1>,
     art_changed: Option<std::time::Instant>,
     /// Color predominante de la carátula actual (para el aura del borde).
     art_color: Option<(f32, f32, f32)>,
-    art_bytes: Option<std::sync::Arc<Vec<u8>>>,
+    /// ID de la carátula cargada (0 = ninguna). Nunca retenemos el Vec<u8> original en RAM.
+    art_id: u64,
     width_px: u32,
     height_px: u32,
     scale: f32,
@@ -249,9 +252,9 @@ impl Renderer {
                 f.SetTrimming(&trim, &sign)?;
             }
 
-            let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
-
+            // WIC se crea de forma diferida (lazy) la primera vez que llega una carátula.
             let mut r = Self {
+                dxgi_device,
                 swap,
                 d2d_factory,
                 ctx,
@@ -259,12 +262,12 @@ impl Renderer {
                 _target: target,
                 _visual: visual,
                 fonts,
-                wic,
+                wic: None,
                 art: None,
-                art_bytes: None,
                 prev_art: None,
                 art_changed: None,
                 art_color: None,
+                art_id: 0,
                 width_px,
                 height_px,
                 scale,
@@ -305,20 +308,54 @@ impl Renderer {
         self.bind_target()
     }
 
-    /// Carátula: se decodifica una sola vez por canción (WIC) y se reduce a 160 px.
-    pub fn set_art(&mut self, bytes: Option<std::sync::Arc<Vec<u8>>>) {
-        let same = match (&bytes, &self.art_bytes) {
-            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        if same {
+    /// Inicializa la fábrica WIC bajo demanda (no carga windowscodecs.dll al arrancar).
+    fn ensure_wic(&mut self) -> Option<&IWICImagingFactory> {
+        if self.wic.is_none() {
+            self.wic = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok() };
+        }
+        self.wic.as_ref()
+    }
+
+    /// Libera cachés gráficos secundarios en reposo absoluto y pide a DXGI purgar buffers del driver.
+    pub fn release_idle_caches(&mut self) {
+        if self.art_fade() >= 1.0 {
+            self.prev_art = None;
+        }
+        self.wic = None;
+        unsafe {
+            if let Ok(d3) = self.dxgi_device.cast::<IDXGIDevice3>() {
+                d3.Trim();
+            }
+        }
+    }
+
+    /// Carátula: decodificada en una sola pasada WIC, escalada al tamaño exacto de UI (64×64 DIP × DPI)
+    /// y descartando inmediatamente el buffer original de alta resolución.
+    pub fn set_art(&mut self, id: u64, bytes: Option<Vec<u8>>) {
+        if id == self.art_id && (bytes.is_none() || self.art.is_some()) {
             return;
         }
+        if id == 0 {
+            self.prev_art = self.art.take();
+            self.art = None;
+            self.art_color = None;
+            self.art_id = 0;
+            self.art_changed = Some(std::time::Instant::now());
+            return;
+        }
+        let Some(raw) = bytes else {
+            return;
+        };
         self.prev_art = self.art.take();
-        self.art_color = bytes.as_ref().and_then(|b| self.dominant_color(b));
-        self.art = bytes.as_ref().and_then(|b| self.decode(b).ok());
-        self.art_bytes = bytes;
+        if let Some((bmp, color)) = self.decode_art_and_color(&raw) {
+            self.art = Some(bmp);
+            self.art_color = color;
+        } else {
+            self.art = None;
+            self.art_color = None;
+        }
+        drop(raw);
+        self.art_id = id;
         self.art_changed = Some(std::time::Instant::now());
     }
 
@@ -336,56 +373,51 @@ impl Renderer {
         self.art_color
     }
 
-    /// Color "vivo" predominante: promedio de una miniatura de 12x12 pesado por saturación,
-    /// con un mínimo de brillo para que el borde siempre se vea sobre negro.
-    fn dominant_color(&self, bytes: &[u8]) -> Option<(f32, f32, f32)> {
-        let wic = self.wic.as_ref()?;
+    /// Decodifica la carátula en una sola pasada WIC, la escala con `IWICBitmapScaler` al tamaño
+    /// físico exacto del slot de 64×64 DIP (64 px a 100% DPI, máx. 128 px a 200% DPI) y calcula
+    /// el color dominante sobre esos mismos píxeles sin decodificar dos veces.
+    fn decode_art_and_color(&mut self, bytes: &[u8]) -> Option<(ID2D1Bitmap1, Option<(f32, f32, f32)>)> {
+        let target_px = (64.0 * self.scale).round().clamp(64.0, 128.0);
+        let wic = self.ensure_wic()?.clone();
         unsafe {
             let stream = wic.CreateStream().ok()?;
             stream.InitializeFromMemory(bytes).ok()?;
             let dec = wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand).ok()?;
             let frame = dec.GetFrame(0).ok()?;
-            let scaler = wic.CreateBitmapScaler().ok()?;
-            scaler.Initialize(&frame, 12, 12, WICBitmapInterpolationModeFant).ok()?;
-            let conv = wic.CreateFormatConverter().ok()?;
-            conv.Initialize(&scaler, &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut).ok()?;
-            let mut px = vec![0u8; 12 * 12 * 4];
-            conv.CopyPixels(std::ptr::null(), 12 * 4, &mut px).ok()?;
-            let (mut r, mut g, mut b, mut wsum) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-            for p in px.chunks_exact(4) {
-                let (pb, pg, pr) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0);
-                let mx = pr.max(pg).max(pb);
-                let mn = pr.min(pg).min(pb);
-                let sat = if mx > 0.0 { (mx - mn) / mx } else { 0.0 };
-                let w = 0.05 + sat * sat * mx; // los colores vivos y claros pesan más
-                r += pr * w;
-                g += pg * w;
-                b += pb * w;
-                wsum += w;
-            }
-            let (r, g, b) = (r / wsum, g / wsum, b / wsum);
-            // Normalizamos el brillo: el canal más alto queda en ~0,95.
-            let mx = r.max(g).max(b).max(0.05);
-            let k = 0.95 / mx;
-            Some(((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)))
-        }
-    }
-
-    fn decode(&self, bytes: &[u8]) -> Result<ID2D1Bitmap1> {
-        let wic = self.wic.as_ref().ok_or_else(windows::core::Error::empty)?;
-        unsafe {
-            let stream = wic.CreateStream()?;
-            stream.InitializeFromMemory(bytes)?;
-            let dec = wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?;
-            let frame = dec.GetFrame(0)?;
             let (mut w, mut h) = (0u32, 0u32);
-            frame.GetSize(&mut w, &mut h)?;
-            let k = (160.0 / w.max(h).max(1) as f32).min(1.0);
-            let scaler = wic.CreateBitmapScaler()?;
-            scaler.Initialize(&frame, ((w as f32 * k) as u32).max(1), ((h as f32 * k) as u32).max(1), WICBitmapInterpolationModeFant)?;
-            let conv = wic.CreateFormatConverter()?;
-            conv.Initialize(&scaler, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)?;
-            self.ctx.CreateBitmapFromWicBitmap(&conv, None)
+            frame.GetSize(&mut w, &mut h).ok()?;
+            // Mantenemos relación de aspecto dejando el lado corto en `target_px` (sin ampliar si ya es chica).
+            let short_side = w.min(h).max(1) as f32;
+            let k = (target_px / short_side).min(1.0);
+            let tw = ((w as f32 * k).round() as u32).clamp(1, (target_px * 2.0) as u32);
+            let th = ((h as f32 * k).round() as u32).clamp(1, (target_px * 2.0) as u32);
+
+            let scaler = wic.CreateBitmapScaler().ok()?;
+            scaler.Initialize(&frame, tw, th, WICBitmapInterpolationModeFant).ok()?;
+            let conv = wic.CreateFormatConverter().ok()?;
+            conv.Initialize(
+                &scaler,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone,
+                None,
+                0.0,
+                WICBitmapPaletteTypeMedianCut,
+            )
+            .ok()?;
+
+            // 1) Color predominante leyendo una muestra liviana del bitmap ya reducido.
+            let stride = tw * 4;
+            let mut px = vec![0u8; (stride * th) as usize];
+            let color = if conv.CopyPixels(std::ptr::null(), stride, &mut px).is_ok() {
+                dominant_from_pbgra(&px)
+            } else {
+                None
+            };
+            drop(px);
+
+            // 2) Bitmap D2D final de tamaño exacto (64×64 = ~16 KB en VRAM a 100% DPI).
+            let bmp = self.ctx.CreateBitmapFromWicBitmap(&conv, None).ok()?;
+            Some((bmp, color))
         }
     }
 
@@ -431,6 +463,10 @@ impl Renderer {
 
             self.ctx.EndDraw(None, None)?;
             self.swap.Present(if vsync { 1 } else { 0 }, DXGI_PRESENT(0)).ok()?;
+            // Al terminar el crossfade de carátula liberamos el bitmap anterior de VRAM de inmediato.
+            if self.prev_art.is_some() && self.art_fade() >= 1.0 {
+                self.prev_art = None;
+            }
             Ok(())
         }
     }
@@ -1183,4 +1219,35 @@ fn tail_fitting(s: &str, max_chars: usize) -> String {
         let tail: String = s.chars().skip(count - max_chars).collect();
         format!("…{tail}")
     }
+}
+
+/// Color predominante calculado directamente sobre el buffer BGRA premultiplicado ya reducido.
+fn dominant_from_pbgra(px: &[u8]) -> Option<(f32, f32, f32)> {
+    let (mut r, mut g, mut b, mut wsum) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    // Muestreamos 1 de cada 4 píxeles (~1024 muestras en 64×64): < 10 µs.
+    for p in px.chunks_exact(4).step_by(4) {
+        let a = p[3] as f32 / 255.0;
+        if a < 0.05 {
+            continue;
+        }
+        let inv = 1.0 / (255.0 * a);
+        let pb = (p[0] as f32 * inv).min(1.0);
+        let pg = (p[1] as f32 * inv).min(1.0);
+        let pr = (p[2] as f32 * inv).min(1.0);
+        let mx = pr.max(pg).max(pb);
+        let mn = pr.min(pg).min(pb);
+        let sat = if mx > 0.0 { (mx - mn) / mx } else { 0.0 };
+        let w = (0.05 + sat * sat * mx) * a;
+        r += pr * w;
+        g += pg * w;
+        b += pb * w;
+        wsum += w;
+    }
+    if wsum <= 1e-4 {
+        return None;
+    }
+    let (r, g, b) = (r / wsum, g / wsum, b / wsum);
+    let mx = r.max(g).max(b).max(0.05);
+    let k = 0.95 / mx;
+    Some(((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)))
 }

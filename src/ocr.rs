@@ -2,7 +2,7 @@
 //! reconoce offline con el motor nativo de Windows (Windows.Media.Ocr) y se copia al portapapeles.
 
 use std::cell::RefCell;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use windows::core::{w, Result};
 use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
@@ -16,11 +16,15 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const WM_OCR_DONE: u32 = WM_APP + 7;
 
-/// Resultado del último OCR: Ok(texto) o Err(mensaje para mostrar).
-static RESULT: Mutex<Option<std::result::Result<String, String>>> = Mutex::new(None);
+/// Resultado del último OCR inicializado de forma diferida (OnceLock): 0 asignaciones al arrancar.
+static RESULT: OnceLock<Mutex<Option<std::result::Result<String, String>>>> = OnceLock::new();
+
+fn result_slot() -> &'static Mutex<Option<std::result::Result<String, String>>> {
+    RESULT.get_or_init(|| Mutex::new(None))
+}
 
 pub fn take_result() -> Option<std::result::Result<String, String>> {
-    RESULT.lock().unwrap().take()
+    RESULT.get()?.lock().unwrap().take()
 }
 
 struct Overlay {
@@ -232,20 +236,25 @@ fn recognize(ov: &Overlay, r: RECT) {
         unsafe {
             let _ = RoInitialize(RO_INIT_MULTITHREADED);
         }
-        let out = run_ocr(&px, cw, ch).map_err(|e| e.message().to_string()).and_then(|o| o);
-        *RESULT.lock().unwrap() = Some(out);
+        let out = run_ocr(px, cw, ch).map_err(|e| e.message().to_string()).and_then(|o| o);
+        *result_slot().lock().unwrap() = Some(out);
         unsafe {
             let _ = PostMessageW(Some(HWND(owner as *mut _)), WM_OCR_DONE, WPARAM(0), LPARAM(0));
         }
     });
 }
 
-fn run_ocr(px: &[u8], w: i32, h: i32) -> Result<std::result::Result<String, String>> {
+fn run_ocr(px: Vec<u8>, w: i32, h: i32) -> Result<std::result::Result<String, String>> {
+    // El motor WinRT (Windows.Media.Ocr) solo se instancia aquí, la primera vez que se usa OCR,
+    // y se suelta al terminar para no retener modelos de idioma en RAM en reposo.
     let Ok(engine) = OcrEngine::TryCreateFromUserProfileLanguages() else {
         return Ok(Err("OCR no disponible: instalá un idioma con reconocimiento de texto en Windows".into()));
     };
-    let buf = CryptographicBuffer::CreateFromByteArray(px)?;
+    let buf = CryptographicBuffer::CreateFromByteArray(&px)?;
+    // Liberamos el buffer BGRA crudo antes de copiar/reconocer.
+    drop(px);
     let bmp = SoftwareBitmap::CreateCopyFromBuffer(&buf, BitmapPixelFormat::Bgra8, w, h)?;
+    drop(buf);
     let res = engine.RecognizeAsync(&bmp)?.get()?;
     let mut lines = Vec::new();
     for line in res.Lines()? {

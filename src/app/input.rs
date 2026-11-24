@@ -24,6 +24,7 @@ impl App {
         }
         if !self.hover {
             self.hover = true;
+            self.cancel_trim();
             self.update_gaze();
             self.pop_eyes();
             if self.mascot.mood == Mood::Asleep {
