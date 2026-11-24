@@ -9,7 +9,7 @@ Bajá **Esme.exe** de la última versión en
 [Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
 arriba al centro. Clic derecho en el ícono de la bandeja → "Ajustes…" para configurarla.
 
-## Estado: v0.9 — Fases 1, 2, 3, 5, 7 y 8 completas, Fase 4 casi completa, Fase 6 en curso
+## Estado: v0.9.1 — Fases 1, 2, 3, 5, 7 y 8 completas, Fase 4 casi completa, Fase 6 en curso
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -109,7 +109,10 @@ arriba al centro. Clic derecho en el ícono de la bandeja → "Ajustes…" para 
   Pomodoro y la meta de agua.
 - Encendé o apagá cada **aviso** de la píldora (volumen, salida de audio, teclado, cargador,
   brillo, batería baja).
-- **Ask Esme**: botón para conseguir la API Key gratis, pegarla o borrarla, y elegir el modelo.
+- **Ask Esme**: botón para conseguir la API Key gratis, pegarla o borrarla, y elegir la familia
+  (Flash, Flash-Lite o Pro). Esme usa el modelo más nuevo que tenga tu key; si Google lo retira o
+  está saturado, pasa sola al siguiente y lo recuerda.
+- Tema claro u oscuro para la ventana de Ajustes y el menú de la bandeja.
 
 ## Estilos al expandir
 

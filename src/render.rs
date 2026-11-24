@@ -229,6 +229,11 @@ impl Renderer {
             let wrap = tf(&dw, ui_font, 13.0, DWRITE_FONT_WEIGHT_NORMAL, l)?;
             wrap.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
             wrap.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            // Si una respuesta no entra, la última línea visible termina en "…".
+            if let Ok(sign) = dw.CreateEllipsisTrimmingSign(&wrap) {
+                let trim = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_WORD, delimiter: 0, delimiterCount: 0 };
+                let _ = wrap.SetTrimming(&trim, &sign);
+            }
             let fonts = Fonts {
                 small: tf(&dw, ui_font, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
                 big: tf(&dw, ui_font, 42.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
@@ -748,6 +753,21 @@ impl Renderer {
             }
         }
         Ok(())
+    }
+
+    /// Alto que ocupa un texto con la fuente de la respuesta de Ask Esme, ajustado a `width`.
+    pub fn wrapped_height(&self, text: &str, width: f32) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        unsafe {
+            let wide: Vec<u16> = text.encode_utf16().collect();
+            let Ok(layout) = self.fonts.dw.CreateTextLayout(&wide, &self.fonts.wrap, width.max(40.0), 2000.0) else {
+                return 0.0;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_ok() { m.height } else { 0.0 }
+        }
     }
 
     /// Mide el ancho exacto en DIPs de un texto con DirectWrite para ubicar el cursor.

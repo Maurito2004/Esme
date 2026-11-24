@@ -5,7 +5,7 @@ use crate::settings::{self as st, row, Act, Cmd, Control, Field, Group, Key, Set
 use crate::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, TrackMouseEvent, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_RETURN};
 
-const MODELS: [&str; 3] = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"];
+const FAMILIES: [&str; 3] = ["flash", "flash-lite", "pro"];
 const TAMANOS: [u32; 3] = [100, 115, 130];
 
 /// Ventana de Ajustes: reenvía sus mensajes a `App`.
@@ -31,7 +31,7 @@ impl App {
             }
             return;
         }
-        if let Some(mut s) = Settings::open(Some(settings_wndproc)) {
+        if let Some(mut s) = Settings::open(Some(settings_wndproc), self.cfg.tema_menu != "claro") {
             s.city_text = self.cfg.ciudad.clone();
             self.settings = Some(s);
             if let Some(s) = &self.settings {
@@ -88,8 +88,8 @@ impl App {
                         rows: vec![row("Mascota", "Pestañea, te mira y se duerme si no usás la PC", Control::Choice(&["Esme", "Gato", "Ninguna"], pet, Key::Pet))],
                     },
                     Group {
-                        title: "Menú de la bandeja",
-                        rows: vec![row("Tema", "Colores del menú del ícono de la bandeja", Control::Choice(&["Oscuro", "Claro"], (c.tema_menu == "claro") as u32, Key::Tema))],
+                        title: "Tema",
+                        rows: vec![row("Tema", "Colores de esta ventana y del menú de la bandeja", Control::Choice(&["Oscuro", "Claro"], (c.tema_menu == "claro") as u32, Key::Tema))],
                     },
                 ]
             }
@@ -158,7 +158,12 @@ impl App {
                 } else {
                     "Sin configurar. Es gratis: tocá «Conseguir key», copiala y tocá «Pegar key».".into()
                 };
-                let model = MODELS.iter().position(|m| *m == c.gemini_model).map(|i| i as u32).unwrap_or(u32::MAX);
+                let model = FAMILIES.iter().position(|m| *m == c.gemini_familia).unwrap_or(0) as u32;
+                let model_desc = if c.gemini_model.is_empty() {
+                    "Se elige el más nuevo disponible\nEsme cambia sola si uno se satura".to_string()
+                } else {
+                    format!("Usando {}\nEsme cambia sola si se satura", c.gemini_model)
+                };
                 vec![
                     Group {
                         title: "Gemini",
@@ -168,7 +173,7 @@ impl App {
                                 key_desc,
                                 Control::Buttons(vec![("Conseguir key", Cmd::KeyGet), ("Pegar key", Cmd::KeyPaste), ("Borrar", Cmd::KeyClear)]),
                             ),
-                            row("Modelo", "Flash es rápido y alcanza para casi todo", Control::Choice(&["Flash", "Flash-Lite", "Pro"], model, Key::Modelo)),
+                            row("Modelo", model_desc, Control::Choice(&["Flash", "Flash-Lite", "Pro"], model, Key::Modelo)),
                         ],
                     },
                     Group {
@@ -219,8 +224,9 @@ impl App {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(h, &mut ps);
                 let groups = self.settings_groups();
+                let dark = self.cfg.tema_menu != "claro";
                 if let Some(s) = self.settings.as_mut() {
-                    s.paint(&groups);
+                    s.paint(&groups, dark);
                 }
                 let _ = EndPaint(h, &ps);
                 Some(LRESULT(0))
@@ -357,6 +363,10 @@ impl App {
                 self.on_geo_done();
                 Some(LRESULT(0))
             }
+            st::WM_KEY_DONE => {
+                self.on_key_done();
+                Some(LRESULT(0))
+            }
             WM_CLOSE => {
                 unsafe {
                     let _ = DestroyWindow(h);
@@ -454,10 +464,22 @@ impl App {
                 self.redraw();
             }
             Key::Pet => self.on_command([CMD_PET_ESME, CMD_PET_GATO, CMD_PET_OFF][i.min(2)]),
-            Key::Tema => self.on_command(if i == 1 { CMD_TEMA_CLARO } else { CMD_TEMA_OSCURO }),
+            Key::Tema => {
+                self.on_command(if i == 1 { CMD_TEMA_CLARO } else { CMD_TEMA_OSCURO });
+                if let Some(s) = &self.settings {
+                    st::set_titlebar(s.hwnd, i != 1);
+                    // Fuerza a Windows a repintar la barra de título con el color nuevo.
+                    unsafe {
+                        let _ = SetWindowPos(s.hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                    }
+                }
+            }
             Key::Modelo => {
-                self.cfg.gemini_model = MODELS[i.min(2)].into();
+                self.cfg.gemini_familia = FAMILIES[i.min(2)].into();
+                // Se elige el más nuevo de la familia en la próxima consulta (o ya, si hay key).
+                self.cfg.gemini_model.clear();
                 let _ = self.cfg.save();
+                self.check_gemini_key(false);
             }
             _ => {}
         }
@@ -535,14 +557,15 @@ impl App {
                 let hwnd = self.settings.as_ref().map(|s| s.hwnd).unwrap_or(self.hwnd);
                 let text = clipboard::read_text(hwnd).unwrap_or_default();
                 let key = text.trim();
-                let msg = if key.len() < 20 || key.contains(char::is_whitespace) {
-                    "Eso no parece una API Key: copiala de nuevo desde Google AI Studio"
+                if key.len() < 20 || key.contains(char::is_whitespace) {
+                    self.set_status(2, "Eso no parece una API Key: copiala de nuevo desde Google AI Studio");
                 } else if self.cfg.set_gemini_api_key(key) {
-                    "Guardada y cifrada con tu usuario de Windows ✓"
+                    self.cfg.gemini_model.clear();
+                    let _ = self.cfg.save();
+                    self.check_gemini_key(true);
                 } else {
-                    "No pude cifrar la key con Windows"
-                };
-                self.set_status(2, msg);
+                    self.set_status(2, "No pude cifrar la key con Windows");
+                }
             }
             Cmd::KeyClear => {
                 let _ = self.cfg.set_gemini_api_key("");
@@ -554,6 +577,43 @@ impl App {
                 let _ = std::fs::create_dir_all(&dir);
                 open_url(&dir.to_string_lossy());
             }
+        }
+    }
+
+    /// Comprueba la key en segundo plano pidiéndole a Google la lista de modelos,
+    /// y de paso elige el más nuevo de la familia.
+    fn check_gemini_key(&mut self, announce: bool) {
+        let Some(key) = self.cfg.gemini_api_key() else { return };
+        let family = self.cfg.gemini_familia.clone();
+        let Some(s) = self.settings.as_mut() else { return };
+        if announce {
+            s.status[2] = "Comprobando la key con Google…".into();
+        }
+        let slot = s.key_check.clone();
+        let hwnd = s.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let res = ask_esme::list_models(&key).and_then(|m| {
+                ask_esme::pick_model(&m, &family).ok_or_else(|| "Tu key no tiene modelos Gemini de texto disponibles".to_string())
+            });
+            *slot.lock().unwrap() = Some(res);
+            unsafe {
+                let _ = PostMessageW(Some(HWND(hwnd as *mut _)), st::WM_KEY_DONE, WPARAM(0), LPARAM(0));
+            }
+        });
+    }
+
+    fn on_key_done(&mut self) {
+        let Some(res) = self.settings.as_ref().and_then(|s| s.key_check.lock().unwrap().take()) else { return };
+        match res {
+            Ok(model) => {
+                self.cfg.gemini_model = model.clone();
+                let _ = self.cfg.save();
+                self.set_status(2, format!("Key válida y cifrada ✓ · modelo {model}"));
+            }
+            Err(e) => self.set_status(2, format!("La key no funciona: {e}")),
+        }
+        if let Some(s) = &self.settings {
+            s.invalidate();
         }
     }
 

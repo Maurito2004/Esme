@@ -283,7 +283,7 @@ impl App {
         let Some(api_key) = self.cfg.gemini_api_key() else {
             let ask = self.ask_mut();
             ask.loading = false;
-            ask.response = "Copiá tu API Key de Gemini y elegí Bandeja → Configuración → IA Gemini → Pegar API Key.".into();
+            ask.response = "Falta tu API Key de Gemini (es gratis): Ajustes → Ask Esme → Conseguir key y Pegar key.".into();
             self.retarget();
             self.refresh();
             return;
@@ -302,6 +302,7 @@ impl App {
             req_id,
             api_key,
             self.cfg.gemini_model.clone(),
+            self.cfg.gemini_familia.clone(),
             task,
             user_text,
             shared,
@@ -310,6 +311,11 @@ impl App {
 
     /// Recepción de `WM_ASK_DONE` desde el hilo de WinHTTP.
     pub(crate) fn on_ask_done(&mut self) {
+        // Si el hilo tuvo que elegir otro modelo (el anterior se retiró), lo recordamos.
+        if let Some(m) = ask_esme::take_new_model() {
+            self.cfg.gemini_model = m;
+            let _ = self.cfg.save();
+        }
         let res = self.ask.as_ref().and_then(|a| a.shared.lock().unwrap().take());
         let Some((id, outcome)) = res else { return };
         let Some(ask) = self.ask.as_mut() else { return };

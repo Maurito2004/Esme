@@ -69,12 +69,15 @@ impl App {
         }
         if self.ask_on {
             d.h += ui::ASK_BASE_EXTRA;
+            d.w = d.w.max(430.0);
             if let Some(ask) = self.ask.as_ref() {
                 if ask.loading || !ask.response.is_empty() {
-                    d.h += ui::ASK_RESP_EXTRA;
+                    // El panel crece con la respuesta (sin pasarse del lienzo).
+                    let text_h = self.renderer.as_ref().map(|r| r.wrapped_height(&ask.response, d.w - 48.0)).unwrap_or(0.0);
+                    let room = (ui::CANVAS_H - d.h - 12.0).max(ui::ASK_RESP_EXTRA);
+                    d.h += (text_h + 42.0).clamp(ui::ASK_RESP_EXTRA, room);
                 }
             }
-            d.w = d.w.max(430.0);
         }
         d
     }

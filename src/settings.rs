@@ -20,6 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Mensaje propio: terminó la búsqueda de ciudad.
 pub const WM_GEO_DONE: u32 = WM_APP + 30;
+/// Mensaje propio: terminó la comprobación de la API key (lista de modelos).
+pub const WM_KEY_DONE: u32 = WM_APP + 31;
 /// Timer del cursor parpadeante del campo de texto.
 pub const T_CARET: usize = 1;
 
@@ -146,6 +148,8 @@ pub struct Settings {
     /// Mensajes de estado: 0 = ciudad, 1 = calendario, 2 = API key.
     pub status: [String; 3],
     pub geo: std::sync::Arc<std::sync::Mutex<Option<std::result::Result<(String, f64, f64), String>>>>,
+    /// Resultado de comprobar la key: el modelo elegido o el error.
+    pub key_check: std::sync::Arc<std::sync::Mutex<Option<std::result::Result<String, String>>>>,
     pub scroll: f32,
     pub hover: Option<Act>,
     hits: Vec<(R, Act)>,
@@ -154,24 +158,69 @@ pub struct Settings {
     gfx: Option<Gfx>,
 }
 
-/// Paleta (oscura, con el azul medianoche de Esme como acento).
-mod col {
-    pub const BG: (f32, f32, f32) = (0.075, 0.075, 0.09);
-    pub const SIDE: (f32, f32, f32) = (0.10, 0.10, 0.12);
-    pub const CARD: (f32, f32, f32) = (0.125, 0.125, 0.15);
-    pub const LINE: (f32, f32, f32) = (0.20, 0.20, 0.24);
-    pub const SEL: (f32, f32, f32) = (0.17, 0.18, 0.24);
-    pub const ACCENT: (f32, f32, f32) = (0.27, 0.45, 1.0);
-    pub const TEXT: (f32, f32, f32) = (0.95, 0.95, 0.97);
-    pub const DIM: (f32, f32, f32) = (0.62, 0.63, 0.68);
-    pub const CTRL: (f32, f32, f32) = (0.20, 0.20, 0.25);
-    pub const CTRL_HOVER: (f32, f32, f32) = (0.26, 0.27, 0.33);
-    pub const INPUT: (f32, f32, f32) = (0.06, 0.06, 0.075);
+type C = (f32, f32, f32);
+
+/// Paleta de la ventana. El acento es el azul medianoche de Esme en los dos temas.
+#[derive(Clone, Copy)]
+struct Pal {
+    bg: C,
+    side: C,
+    card: C,
+    line: C,
+    sel: C,
+    accent: C,
+    text: C,
+    dim: C,
+    ctrl: C,
+    ctrl_hover: C,
+    input: C,
+}
+
+const WHITE: C = (1.0, 1.0, 1.0);
+
+fn pal(dark: bool) -> Pal {
+    if dark {
+        Pal {
+            bg: (0.075, 0.075, 0.09),
+            side: (0.10, 0.10, 0.12),
+            card: (0.125, 0.125, 0.15),
+            line: (0.20, 0.20, 0.24),
+            sel: (0.17, 0.18, 0.24),
+            accent: (0.27, 0.45, 1.0),
+            text: (0.95, 0.95, 0.97),
+            dim: (0.62, 0.63, 0.68),
+            ctrl: (0.20, 0.20, 0.25),
+            ctrl_hover: (0.26, 0.27, 0.33),
+            input: (0.06, 0.06, 0.075),
+        }
+    } else {
+        Pal {
+            bg: (0.955, 0.957, 0.968),
+            side: (0.918, 0.922, 0.94),
+            card: (1.0, 1.0, 1.0),
+            line: (0.88, 0.885, 0.91),
+            sel: (0.85, 0.885, 1.0),
+            accent: (0.22, 0.40, 0.96),
+            text: (0.10, 0.10, 0.13),
+            dim: (0.40, 0.41, 0.46),
+            ctrl: (0.905, 0.91, 0.935),
+            ctrl_hover: (0.85, 0.86, 0.895),
+            input: (1.0, 1.0, 1.0),
+        }
+    }
+}
+
+/// Barra de título oscura o clara (Windows 10 20H1+ y 11).
+pub fn set_titlebar(hwnd: HWND, dark: bool) {
+    let v = BOOL(dark as i32);
+    unsafe {
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const _ as _, 4);
+    }
 }
 
 impl Settings {
     /// Crea la ventana (centrada en el monitor principal) y la muestra.
-    pub fn open(wndproc: WNDPROC) -> Option<Self> {
+    pub fn open(wndproc: WNDPROC, dark: bool) -> Option<Self> {
         unsafe {
             let hinst = GetModuleHandleW(None).ok()?;
             let class = w!("EsmeAjustes");
@@ -205,9 +254,7 @@ impl Settings {
                 None,
             )
             .ok()?;
-            // Barra de título oscura (Windows 10 20H1+ y 11).
-            let dark = BOOL(1);
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
+            set_titlebar(hwnd, dark);
             let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
             let (w, h) = ((780.0 * scale) as i32, (580.0 * scale) as i32);
             let mut wa = RECT::default();
@@ -223,6 +270,7 @@ impl Settings {
                 caret_on: false,
                 status: Default::default(),
                 geo: Default::default(),
+                key_check: Default::default(),
                 scroll: 0.0,
                 hover: None,
                 hits: Vec::new(),
@@ -339,7 +387,7 @@ impl Settings {
     }
 
     /// Dibuja todo. `groups` es el contenido de la sección actual.
-    pub fn paint(&mut self, groups: &[Group]) {
+    pub fn paint(&mut self, groups: &[Group], dark: bool) {
         if self.ensure_gfx().is_err() {
             return;
         }
@@ -352,30 +400,31 @@ impl Settings {
         let city = self.city_text.clone();
         let scroll = self.scroll;
         let g = self.gfx.as_ref().unwrap();
-        let p = Painter { g, hover };
+        let p = Painter { g, hover, pal: pal(dark) };
+        let pl = p.pal;
         let content_h;
         unsafe {
             g.rt.BeginDraw();
-            g.rt.Clear(Some(&rgba(col::BG, 1.0)));
+            g.rt.Clear(Some(&rgba(pl.bg, 1.0)));
 
             // ---------- Contenido (con scroll) ----------
             let x0 = SIDEBAR_W + CONTENT_PAD;
             let x1 = (w - CONTENT_PAD).min(x0 + CONTENT_MAX_W).max(x0 + 300.0);
             let mut y = 26.0 - scroll;
-            p.text(SECTIONS[section].1, &g.f_title, R::new(x0, y, x1, y + 34.0), col::TEXT, 1.0);
+            p.text(SECTIONS[section].1, &g.f_title, R::new(x0, y, x1, y + 34.0), pl.text, 1.0);
             y += 50.0;
             for grp in groups {
                 if !grp.title.is_empty() {
-                    p.text(grp.title, &g.f_group, R::new(x0 + 2.0, y, x1, y + 22.0), col::DIM, 1.0);
+                    p.text(grp.title, &g.f_group, R::new(x0 + 2.0, y, x1, y + 22.0), pl.dim, 1.0);
                     y += 26.0;
                 }
                 let card_top = y;
                 let heights: Vec<f32> = grp.rows.iter().map(row_height).collect();
                 let card_h: f32 = heights.iter().sum();
-                p.round(R::new(x0, card_top, x1, card_top + card_h), 10.0, col::CARD, 1.0);
+                p.round(R::new(x0, card_top, x1, card_top + card_h), 10.0, pl.card, 1.0);
                 for (i, (r, rh)) in grp.rows.iter().zip(&heights).enumerate() {
                     if i > 0 {
-                        p.fill(R::new(x0 + 16.0, y, x1 - 16.0, y + 1.0), col::LINE, 1.0);
+                        p.fill(R::new(x0 + 16.0, y, x1 - 16.0, y + 1.0), pl.line, 1.0);
                     }
                     p.draw_row(r, R::new(x0, y, x1, y + rh), &mut hits, focus, caret, &city);
                     y += rh;
@@ -385,25 +434,25 @@ impl Settings {
             content_h = y + scroll;
 
             // ---------- Barra lateral (encima del contenido que scrollea) ----------
-            p.fill(R::new(0.0, 0.0, SIDEBAR_W, h), col::SIDE, 1.0);
-            p.text("Esme", &g.f_brand, R::new(24.0, 20.0, SIDEBAR_W, 44.0), col::TEXT, 1.0);
-            p.text(concat!("Versión ", env!("CARGO_PKG_VERSION")), &g.f_desc, R::new(24.0, 46.0, SIDEBAR_W, 64.0), col::DIM, 1.0);
+            p.fill(R::new(0.0, 0.0, SIDEBAR_W, h), pl.side, 1.0);
+            p.text("Esme", &g.f_brand, R::new(24.0, 20.0, SIDEBAR_W, 44.0), pl.text, 1.0);
+            p.text(concat!("Versión ", env!("CARGO_PKG_VERSION")), &g.f_desc, R::new(24.0, 46.0, SIDEBAR_W, 64.0), pl.dim, 1.0);
             let mut sy = 84.0;
             for (i, (glyph, name)) in SECTIONS.iter().enumerate() {
                 let r = R::new(12.0, sy, SIDEBAR_W - 12.0, sy + 38.0);
                 let sel = i == section;
                 if sel || hover == Some(Act::Section(i)) {
-                    p.round(r, 8.0, if sel { col::SEL } else { col::CTRL }, if sel { 1.0 } else { 0.6 });
+                    p.round(r, 8.0, if sel { pl.sel } else { pl.ctrl }, if sel { 1.0 } else { 0.6 });
                 }
                 if sel {
-                    p.round(R::new(r.l, r.t + 10.0, r.l + 3.0, r.b - 10.0), 1.5, col::ACCENT, 1.0);
+                    p.round(R::new(r.l, r.t + 10.0, r.l + 3.0, r.b - 10.0), 1.5, pl.accent, 1.0);
                 }
-                p.text(glyph, &g.f_icon, R::new(r.l + 14.0, r.t, r.l + 40.0, r.b), if sel { col::ACCENT } else { col::DIM }, 1.0);
-                p.text(name, &g.f_row, R::new(r.l + 44.0, r.t, r.r - 6.0, r.b), col::TEXT, if sel { 1.0 } else { 0.85 });
+                p.text(glyph, &g.f_icon, R::new(r.l + 14.0, r.t, r.l + 40.0, r.b), if sel { pl.accent } else { pl.dim }, 1.0);
+                p.text(name, &g.f_row, R::new(r.l + 44.0, r.t, r.r - 6.0, r.b), pl.text, if sel { 1.0 } else { 0.85 });
                 hits.push((r, Act::Section(i)));
                 sy += 42.0;
             }
-            p.text("Los cambios se guardan solos", &g.f_desc, R::new(24.0, h - 34.0, SIDEBAR_W, h - 12.0), col::DIM, 0.8);
+            p.text("Los cambios se guardan solos", &g.f_desc, R::new(24.0, h - 34.0, SIDEBAR_W, h - 12.0), pl.dim, 0.8);
 
             let _ = g.rt.EndDraw(None, None);
         }
@@ -426,6 +475,7 @@ fn row_height(r: &Row) -> f32 {
 struct Painter<'a> {
     g: &'a Gfx,
     hover: Option<Act>,
+    pal: Pal,
 }
 
 impl Painter<'_> {
@@ -469,9 +519,9 @@ impl Painter<'_> {
     /// Botón tipo píldora; devuelve su rectángulo.
     fn pill_button(&self, label: &str, r: R, act: Act, primary: bool, hits: &mut Vec<(R, Act)>) {
         let hv = self.hovered(act);
-        let c = if primary { col::ACCENT } else if hv { col::CTRL_HOVER } else { col::CTRL };
+        let c = if primary { self.pal.accent } else if hv { self.pal.ctrl_hover } else { self.pal.ctrl };
         self.round(r, r.h() / 2.0, c, if primary && hv { 0.85 } else { 1.0 });
-        self.text(label, &self.g.f_ctrl_c, r, col::TEXT, 1.0);
+        self.text(label, &self.g.f_ctrl_c, r, if primary { WHITE } else { self.pal.text }, 1.0);
         hits.push((r, act));
     }
 
@@ -489,10 +539,10 @@ impl Painter<'_> {
         let text_r = r.r - 18.0 - ctrl_w - 12.0;
         let compact = row.desc.is_empty() && !matches!(row.control, Control::Field(..) | Control::Buttons(..));
         let title_r = if compact { R::new(tx, r.t, text_r, r.b) } else { R::new(tx, r.t + 12.0, text_r, r.t + 34.0) };
-        self.text(&row.title, &g.f_row, title_r, col::TEXT, 1.0);
+        self.text(&row.title, &g.f_row, title_r, self.pal.text, 1.0);
         let mut dy = r.t + 34.0;
         for line in row.desc.lines() {
-            self.text(line, &g.f_desc, R::new(tx, dy, text_r.max(r.r - 18.0 - ctrl_w), dy + 18.0), col::DIM, 1.0);
+            self.text(line, &g.f_desc, R::new(tx, dy, text_r.max(r.r - 18.0 - ctrl_w), dy + 18.0), self.pal.dim, 1.0);
             dy += 18.0;
         }
         let cy = if compact { (r.t + r.b) / 2.0 } else { r.t + 31.0 };
@@ -503,31 +553,32 @@ impl Painter<'_> {
                 let act = Act::Toggle(*key);
                 let hv = self.hovered(act);
                 if *on {
-                    self.round(t, 11.0, col::ACCENT, if hv { 0.85 } else { 1.0 });
+                    self.round(t, 11.0, self.pal.accent, if hv { 0.85 } else { 1.0 });
                 } else {
-                    self.round(t, 11.0, if hv { col::CTRL_HOVER } else { col::CTRL }, 1.0);
-                    self.outline(t, 11.0, col::DIM, 0.6, 1.0);
+                    self.round(t, 11.0, if hv { self.pal.ctrl_hover } else { self.pal.ctrl }, 1.0);
+                    self.outline(t, 11.0, self.pal.dim, 0.6, 1.0);
                 }
                 let kx = if *on { t.r - 11.0 } else { t.l + 11.0 };
                 let knob = R::new(kx - 7.0, cy - 7.0, kx + 7.0, cy + 7.0);
-                self.round(knob, 7.0, if *on { (1.0, 1.0, 1.0) } else { col::DIM }, 1.0);
+                self.round(knob, 7.0, if *on { WHITE } else { self.pal.dim }, 1.0);
                 hits.push((R::new(t.l - 6.0, r.t, r.r, r.b), act));
             }
             Control::Choice(opts, sel, key) => {
                 let total: f32 = opts.iter().map(|o| seg_w(o)).sum::<f32>() + 8.0;
                 let c = R::new(r.r - 18.0 - total, cy - 16.0, r.r - 18.0, cy + 16.0);
-                self.round(c, 9.0, col::CTRL, 1.0);
+                self.round(c, 9.0, self.pal.ctrl, 1.0);
                 let mut x = c.l + 4.0;
                 for (i, o) in opts.iter().enumerate() {
                     let sw = seg_w(o);
                     let s = R::new(x, c.t + 4.0, x + sw, c.b - 4.0);
                     let act = Act::Choose(*key, i as u32);
                     if i as u32 == *sel {
-                        self.round(s, 6.0, col::ACCENT, 1.0);
+                        self.round(s, 6.0, self.pal.accent, 1.0);
                     } else if self.hovered(act) {
-                        self.round(s, 6.0, col::CTRL_HOVER, 1.0);
+                        self.round(s, 6.0, self.pal.ctrl_hover, 1.0);
                     }
-                    self.text(o, &g.f_ctrl_c, s, col::TEXT, if i as u32 == *sel { 1.0 } else { 0.8 });
+                    let on = i as u32 == *sel;
+                    self.text(o, &g.f_ctrl_c, s, if on { WHITE } else { self.pal.text }, if on { 1.0 } else { 0.8 });
                     hits.push((s, act));
                     x += sw;
                 }
@@ -537,34 +588,34 @@ impl Painter<'_> {
                 let minus = R::new(plus.l - 110.0, cy - 15.0, plus.l - 80.0, cy + 15.0);
                 for (b, glyph, d) in [(minus, "\u{E738}", -1), (plus, "\u{E710}", 1)] {
                     let act = Act::Step(*key, d);
-                    self.round(b, 15.0, if self.hovered(act) { col::CTRL_HOVER } else { col::CTRL }, 1.0);
-                    self.text(glyph, &g.f_icon_c, b, col::TEXT, 1.0);
+                    self.round(b, 15.0, if self.hovered(act) { self.pal.ctrl_hover } else { self.pal.ctrl }, 1.0);
+                    self.text(glyph, &g.f_icon_c, b, self.pal.text, 1.0);
                     hits.push((b, act));
                 }
-                self.text(value, &g.f_ctrl_c, R::new(minus.r, cy - 12.0, plus.l, cy + 12.0), col::TEXT, 1.0);
+                self.text(value, &g.f_ctrl_c, R::new(minus.r, cy - 12.0, plus.l, cy + 12.0), self.pal.text, 1.0);
             }
             Control::Keys(k) => {
                 let kw = k.chars().count() as f32 * 7.6 + 24.0;
                 let b = R::new(r.r - 18.0 - kw, cy - 14.0, r.r - 18.0, cy + 14.0);
-                self.round(b, 7.0, col::CTRL, 1.0);
-                self.text(k, &g.f_ctrl_c, b, col::TEXT, 0.9);
+                self.round(b, 7.0, self.pal.ctrl, 1.0);
+                self.text(k, &g.f_ctrl_c, b, self.pal.text, 0.9);
             }
             Control::Field(field, placeholder, buttons) => {
                 let by = r.b - 46.0;
                 let buttons_w: f32 = buttons.iter().map(|(l, _)| btn_w(l) + 8.0).sum();
                 let input = R::new(tx, by, r.r - 18.0 - buttons_w, by + 34.0);
                 let focused = focus == Some(*field);
-                self.round(input, 8.0, col::INPUT, 1.0);
-                self.outline(input, 8.0, if focused { col::ACCENT } else { col::LINE }, 1.0, if focused { 1.5 } else { 1.0 });
+                self.round(input, 8.0, self.pal.input, 1.0);
+                self.outline(input, 8.0, if focused { self.pal.accent } else { self.pal.line }, 1.0, if focused { 1.5 } else { 1.0 });
                 let txt_r = R::new(input.l + 12.0, input.t, input.r - 10.0, input.b);
                 if city.is_empty() {
-                    self.text(placeholder, &g.f_ctrl, txt_r, col::DIM, 0.8);
+                    self.text(placeholder, &g.f_ctrl, txt_r, self.pal.dim, 0.8);
                 } else {
-                    self.text(city, &g.f_ctrl, txt_r, col::TEXT, 1.0);
+                    self.text(city, &g.f_ctrl, txt_r, self.pal.text, 1.0);
                 }
                 if focused && caret {
                     let cx = txt_r.l + text_width(g, city).min(txt_r.w() - 2.0) + 1.0;
-                    self.fill(R::new(cx, input.t + 8.0, cx + 1.5, input.b - 8.0), col::TEXT, 1.0);
+                    self.fill(R::new(cx, input.t + 8.0, cx + 1.5, input.b - 8.0), self.pal.text, 1.0);
                 }
                 hits.push((input, Act::Focus(*field)));
                 let mut x = input.r + 8.0;

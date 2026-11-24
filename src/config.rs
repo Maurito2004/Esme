@@ -42,9 +42,13 @@ pub struct Config {
     /// URL privada iCal (ej. Google Calendar → "Dirección secreta en formato iCal").
     #[nserde(default)]
     pub ical_url: String,
-    /// Modelo de Gemini para Ask Esme y Traductor (por defecto "gemini-2.5-flash").
+    /// Modelo concreto de Gemini que se está usando (vacío = elegir el más nuevo disponible).
+    /// Esme lo actualiza sola si Google retira el modelo.
     #[nserde(default)]
     pub gemini_model: String,
+    /// Familia elegida en Ajustes: "flash" (por defecto), "flash-lite" o "pro".
+    #[nserde(default)]
+    pub gemini_familia: String,
     /// API Key de Gemini cifrada con Windows DPAPI (en hexadecimal, atada al usuario actual de Windows).
     #[nserde(default)]
     pub gemini_key_dpapi: String,
@@ -101,7 +105,8 @@ impl Default for Config {
             tema_menu: "oscuro".into(),
             agua_meta: 8,
             ical_url: String::new(),
-            gemini_model: "gemini-2.5-flash".into(),
+            gemini_model: String::new(),
+            gemini_familia: "flash".into(),
             gemini_key_dpapi: String::new(),
             tamano: 100,
             ciudad: String::new(),
@@ -187,8 +192,23 @@ impl Config {
         if !cfg.mascota {
             cfg.mascota_tipo = "off".into();
         }
-        if cfg.gemini_model.trim().is_empty() {
-            cfg.gemini_model = "gemini-2.5-flash".into();
+        // El modelo fijo de versiones anteriores ya no está disponible para keys nuevas:
+        // lo dejamos vacío y Esme elige el más nuevo que tenga la key.
+        if cfg.gemini_model.starts_with("gemini-2.5") {
+            if cfg.gemini_familia.is_empty() {
+                cfg.gemini_familia = if cfg.gemini_model.contains("lite") {
+                    "flash-lite"
+                } else if cfg.gemini_model.contains("pro") {
+                    "pro"
+                } else {
+                    "flash"
+                }
+                .into();
+            }
+            cfg.gemini_model.clear();
+        }
+        if !matches!(cfg.gemini_familia.as_str(), "flash" | "flash-lite" | "pro") {
+            cfg.gemini_familia = "flash".into();
         }
         if !matches!(cfg.tamano, 100 | 115 | 130) {
             cfg.tamano = 100;

@@ -21,6 +21,11 @@ impl Drop for Handle {
 
 /// `host` sin esquema (ej. "lrclib.net"), `path` con query ya codificada.
 pub fn get(host: &str, path: &str) -> Option<Response> {
+    get_with_headers(host, path, "")
+}
+
+/// Igual que `get`, con encabezados extra (cada línea terminada en CRLF), p. ej. una API key.
+pub fn get_with_headers(host: &str, path: &str, extra_headers: &str) -> Option<Response> {
     unsafe {
         let session = Handle(WinHttpOpen(
             w!("Esme/0.5 (+https://github.com/Maurito2004/Esme)"),
@@ -49,7 +54,9 @@ pub fn get(host: &str, path: &str) -> Option<Response> {
         if req.0.is_null() {
             return None;
         }
-        WinHttpSendRequest(req.0, None, None, 0, 0, 0).ok()?;
+        let headers: Vec<u16> = extra_headers.encode_utf16().collect();
+        let headers = (!headers.is_empty()).then_some(headers.as_slice());
+        WinHttpSendRequest(req.0, headers, None, 0, 0, 0).ok()?;
         WinHttpReceiveResponse(req.0, std::ptr::null_mut()).ok()?;
 
         let mut status = 0u32;
@@ -84,7 +91,7 @@ pub fn get(host: &str, path: &str) -> Option<Response> {
 /// POST HTTPS con payload JSON usando WinHTTP nativo.
 /// `extra_headers` va tal cual (cada línea terminada en "\r\n"), p. ej. la API key,
 /// para que nunca viaje en la URL.
-pub fn post_json(host: &str, path: &str, extra_headers: &str, json_body: &str) -> Option<Response> {
+pub fn post_json(host: &str, path: &str, extra_headers: &str, json_body: &str, recv_timeout_ms: i32) -> Option<Response> {
     unsafe {
         let session = Handle(WinHttpOpen(
             w!("Esme/0.6 (+https://github.com/Maurito2004/Esme)"),
@@ -96,7 +103,8 @@ pub fn post_json(host: &str, path: &str, extra_headers: &str, json_body: &str) -
         if session.0.is_null() {
             return None;
         }
-        let _ = WinHttpSetTimeouts(session.0, 5000, 5000, 8000, 15000);
+        // Recepción larga: los modelos que "piensan" pueden tardar bastante en responder.
+        let _ = WinHttpSetTimeouts(session.0, 5000, 5000, 8000, recv_timeout_ms);
         let conn = Handle(WinHttpConnect(session.0, &HSTRING::from(host), INTERNET_DEFAULT_HTTPS_PORT, 0));
         if conn.0.is_null() {
             return None;
