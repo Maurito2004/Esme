@@ -9,7 +9,7 @@ Bajá **Esme.exe** de la última versión en
 [Releases](https://github.com/Maurito2004/Esme/releases/latest), abrilo y listo: aparece la barra
 arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 
-## Estado: v0.6 — Fases 1, 2, 3 y 5 completas, Fase 4 casi completa
+## Estado: v0.7 — Fases 1, 2, 3 y 5 completas, Fase 4 casi completa, Fase 6 en curso
 
 **Fase 1 — base**
 - Ventana transparente por píxel, siempre visible, fuera de Alt+Tab, sin robar el foco.
@@ -74,6 +74,20 @@ arriba al centro. Clic derecho en el ícono de la bandeja para configurarla.
 - **Smart OCR** (`Ctrl + Alt + T` o bandeja → "Capturar texto"): congela la pantalla, elegís un área
   y el texto se reconoce offline con `Windows.Media.Ocr` y se copia al portapapeles (aviso en la
   píldora). Esc o clic derecho cancela.
+
+**Fase 6 — Ask Esme** (`Ctrl + Alt + Espacio`, botón ⚡ del panel o bandeja → "Ask Esme / Traductor")
+- Cuadro de texto dentro del notch. Solo toma el teclado mientras está abierto: Esme nunca lee el
+  teclado del resto del sistema. Con un juego en pantalla completa el atajo no hace nada (no le roba
+  el foco al juego); con clic sí se abre.
+- **Calculadora** local al terminar en `=`: `1500*3+(450/2)=` → 4725 (paréntesis, potencias, %).
+- **Monedas** al terminar en `=`: `100 usd a ars=`, `50 eur en usd=`, y para Argentina
+  `100 usd a blue=` / `50000 mep en usd=` (dólar blue y MEP de dolarapi.com). Las tasas se
+  actualizan una vez por día y quedan guardadas para usarlas sin internet.
+- **Timer rápido**: `timer 10m`, `timer 45s`, `timer 1h 30m` + Enter; la píldora muestra la cuenta.
+- **Preguntar / Traducir** (Tab cambia de modo) y **Resumir clip** / **Corregir** lo copiado, con
+  Gemini. Necesita tu propia API Key gratuita de Google AI Studio: copiala y elegí bandeja →
+  Configuración → IA Gemini → Pegar API Key. Se guarda cifrada con Windows (DPAPI), atada a tu
+  usuario, y viaja en un header HTTPS, nunca en la URL.
 
 ## Estilos al expandir
 

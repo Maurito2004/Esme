@@ -171,6 +171,8 @@ impl App {
                     self.lyrics_on = false;
                     self.shelf_on = false;
                     self.today_on = false;
+                    self.ask_on = false;
+                    self.focus_ask_input(false);
                 }
                 self.retarget();
             }
@@ -180,9 +182,28 @@ impl App {
                     self.lyrics_on = false;
                     self.clip_on = false;
                     self.shelf_on = false;
+                    self.ask_on = false;
+                    self.focus_ask_input(false);
                     self.water = std::mem::take(&mut self.water).for_today();
                 }
                 self.retarget();
+            }
+            Btn::Ask => self.toggle_ask(false),
+            Btn::AskMode => {
+                self.ask.mode = self.ask.mode.toggle();
+                self.focus_ask_input(true);
+                self.refresh();
+            }
+            Btn::AskInput => {
+                self.focus_ask_input(true);
+                self.refresh();
+            }
+            Btn::AskSummarize => self.run_clip_ai_action(true),
+            Btn::AskSpellcheck => self.run_clip_ai_action(false),
+            Btn::AskCopy => {
+                if !self.ask.response.is_empty() && clipboard::set_text(self.hwnd, &self.ask.response) {
+                    self.trigger_ask_copied();
+                }
             }
             Btn::PomoToggle => self.pomo_toggle(),
             Btn::PomoReset => self.pomo_reset(),
@@ -194,6 +215,8 @@ impl App {
                     self.lyrics_on = false;
                     self.clip_on = false;
                     self.today_on = false;
+                    self.ask_on = false;
+                    self.focus_ask_input(false);
                 }
                 self.retarget();
             }
@@ -220,6 +243,8 @@ impl App {
                     self.clip_on = false;
                     self.shelf_on = false;
                     self.today_on = false;
+                    self.ask_on = false;
+                    self.focus_ask_input(false);
                 }
                 if self.lyrics_on && self.lyrics.is_none() {
                     self.fetch_lyrics();
@@ -294,11 +319,17 @@ impl App {
                 self.check_fullscreen();
             }
             CMD_OCR => ocr::start(self.hwnd),
+            CMD_ASK => self.toggle_ask(true),
             CMD_ICAL_PASTE => self.paste_ical(),
             CMD_ICAL_CLEAR => {
                 self.cfg.ical_url.clear();
                 let _ = self.cfg.save();
                 self.refresh_data();
+            }
+            CMD_GEMINI_PASTE => self.paste_gemini_key(),
+            CMD_GEMINI_CLEAR => {
+                let _ = self.cfg.set_gemini_api_key("");
+                self.show_toast("API Key de Gemini borrada".into(), 2200);
             }
             c if (CMD_WATER_GOAL + 1..=CMD_WATER_GOAL + 30).contains(&c) => {
                 self.cfg.agua_meta = c - CMD_WATER_GOAL;

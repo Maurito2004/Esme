@@ -31,10 +31,13 @@ pub const CMD_PET_ESME: u32 = 110;
 pub const CMD_PET_GATO: u32 = 111;
 pub const CMD_PET_OFF: u32 = 112;
 pub const CMD_OCR: u32 = 120;
+pub const CMD_ASK: u32 = 121;
 pub const CMD_TEMA_OSCURO: u32 = 130;
 pub const CMD_TEMA_CLARO: u32 = 131;
 pub const CMD_ICAL_PASTE: u32 = 140;
 pub const CMD_ICAL_CLEAR: u32 = 141;
+pub const CMD_GEMINI_PASTE: u32 = 145;
+pub const CMD_GEMINI_CLEAR: u32 = 146;
 /// Meta de agua: CMD_WATER_GOAL + cantidad de vasos.
 pub const CMD_WATER_GOAL: u32 = 150;
 
@@ -48,10 +51,12 @@ pub struct MenuState {
     pub dark: bool,
     pub water_goal: u32,
     pub has_ical: bool,
+    pub has_gemini: bool,
 }
 
 // Glifos de Segoe Fluent Icons / MDL2.
 const I_OCR: &str = "\u{E8B3}";
+const I_ASK: &str = "\u{E945}";
 const I_PET: &str = "\u{E76E}";
 const I_CONFIG: &str = "\u{E713}";
 const I_SALIR: &str = "\u{E7E8}";
@@ -161,6 +166,7 @@ impl Tray {
 
             add(menu, 0, Item { disabled: true, ..it("Esme", None, false) });
             add_sep(menu);
+            add(menu, CMD_ASK as usize, Item { accel: "Ctrl+Alt+Espacio".into(), ..it("Ask Esme / Traductor", Some(I_ASK), false) });
             add(menu, CMD_OCR as usize, Item { accel: "Ctrl+Alt+T".into(), ..it("Capturar texto", Some(I_OCR), false) });
 
             let pets = CreatePopupMenu().unwrap_or_default();
@@ -192,6 +198,12 @@ impl Tray {
                 add(cal, CMD_ICAL_CLEAR as usize, it("Quitar calendario", None, false));
             }
             add_sub(cfg, cal, it(if s.has_ical { "Calendario (conectado)" } else { "Calendario" }, None, false));
+            let ai = CreatePopupMenu().unwrap_or_default();
+            add(ai, CMD_GEMINI_PASTE as usize, it("Pegar API Key de Gemini copiada (cifrado DPAPI)", None, false));
+            if s.has_gemini {
+                add(ai, CMD_GEMINI_CLEAR as usize, it("Borrar API Key de Gemini", None, false));
+            }
+            add_sub(cfg, ai, it(if s.has_gemini { "IA Gemini (configurada)" } else { "IA Gemini" }, None, false));
             add_sub(menu, cfg, it("Configuración", Some(I_CONFIG), false));
 
             add_sep(menu);
@@ -286,7 +298,7 @@ fn prepare_paint(owner: HWND, dark: bool) {
         let icon_px = (16.0 * scale).round() as i32;
         let mut icons = HashMap::new();
         if let Some(p) = IconPainter::new(dark, icon_px as u32) {
-            for g in [I_OCR, I_PET, I_CONFIG, I_SALIR, I_PANTALLA, I_TEMA, I_CHECK, I_CHEVRON] {
+            for g in [I_OCR, I_ASK, I_PET, I_CONFIG, I_SALIR, I_PANTALLA, I_TEMA, I_CHECK, I_CHEVRON] {
                 if let Some(b) = p.bitmap(g) {
                     icons.insert(g, b);
                 }

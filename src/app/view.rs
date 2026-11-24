@@ -87,10 +87,15 @@ impl App {
         let tiles: Vec<(&'static str, String)> =
             self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
         let pomo_text = self.pomo.text();
+        let qtimer = self.quick_timer_status();
+        let qtimer_text = qtimer.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+        let inline_prev = self.ask_inline_preview();
         let collapsed = if let Some(o) = &self.overlay {
             Collapsed::Overlay { glyph: o.glyph, text: &o.text, level: o.level.map(|_| self.level.value) }
         } else if let Some(t) = &self.toast {
             Collapsed::Lyric(t)
+        } else if let Some((_, prog)) = qtimer {
+            Collapsed::Overlay { glyph: "\u{E916}", text: &qtimer_text, level: Some(prog) }
         } else if self.pomo_pill() {
             // Pomodoro: cuenta regresiva viva en la píldora (rojo tomate = foco, verde = descanso).
             let glyph = if self.pomo.mode == productivity::Mode::Focus { "\u{E916}" } else { "\u{E708}" };
@@ -176,6 +181,24 @@ impl App {
             } else {
                 None
             },
+            ask: if self.ask_on {
+                Some(AskView {
+                    mode_label: self.ask.mode.label(),
+                    is_translate: self.ask.mode == ask_esme::AskMode::Translate,
+                    input: &self.ask.input,
+                    placeholder: self.ask.mode.placeholder(),
+                    focused: self.ask.focus,
+                    caret_on: self.ask.caret_visible,
+                    selected_all: self.ask.selected_all,
+                    inline_preview: inline_prev.as_deref(),
+                    loading: self.ask.loading,
+                    response: &self.ask.response,
+                    copied: self.ask.copied_feedback,
+                    has_clip: !self.clip.items.is_empty(),
+                })
+            } else {
+                None
+            },
         };
         let ok = match self.renderer.as_mut() {
             Some(r) => r.draw(&frame, vsync).is_ok(),
@@ -193,12 +216,22 @@ impl App {
 
     /// Juego o video a pantalla completa en el monitor del notch: nos vamos al otro
     /// monitor (si la opción está activa y hay uno libre) o nos escondemos.
-    pub(crate) fn check_fullscreen(&mut self) {
-        let games: Vec<String> = fullscreen::JUEGOS_BASE
+    fn game_list(&self) -> Vec<String> {
+        fullscreen::JUEGOS_BASE
             .iter()
             .map(|s| s.to_string())
             .chain(self.cfg.juegos_extra.iter().map(|s| s.trim().to_lowercase()))
-            .collect();
+            .collect()
+    }
+
+    /// ¿Hay un juego o algo en pantalla completa en algún monitor? Se usa para que
+    /// el atajo de Ask Esme no le robe el foco al juego (lo minimizaría).
+    pub(crate) fn game_active(&self) -> bool {
+        self.hidden || !fullscreen::fullscreen_monitors(self.hwnd, &self.game_list()).is_empty()
+    }
+
+    pub(crate) fn check_fullscreen(&mut self) {
+        let games = self.game_list();
         let full = fullscreen::fullscreen_monitors(self.hwnd, &games);
         let mons = fullscreen::monitors();
         let Some(&primary) = mons.first() else { return };

@@ -83,7 +83,7 @@ impl App {
 
     pub(crate) fn on_timer(&mut self, id: usize) {
         unsafe {
-            if id != T_PROGRESS && id != T_HOVERCHECK && id != T_POMO && id != T_DATA {
+            if id != T_PROGRESS && id != T_HOVERCHECK && id != T_POMO && id != T_DATA && id != T_CARET && id != T_QTIMER {
                 let _ = KillTimer(Some(self.hwnd), id);
             }
         }
@@ -127,6 +127,17 @@ impl App {
             T_IDLE => self.check_idle(),
             T_FS => self.check_fullscreen(),
             T_POMO => self.on_pomo_tick(),
+            T_QTIMER => self.on_quick_timer_tick(),
+            T_CARET => {
+                if self.ask_on && self.ask.focus {
+                    self.ask.caret_visible = !self.ask.caret_visible;
+                    self.refresh();
+                } else {
+                    unsafe {
+                        let _ = KillTimer(Some(self.hwnd), T_CARET);
+                    }
+                }
+            }
             T_DATA => self.refresh_data(),
             T_OVERLAY => {
                 self.overlay = None;
@@ -150,6 +161,7 @@ impl App {
             }
             T_COPIED => {
                 self.clip_copied = None;
+                self.ask.copied_feedback = false;
                 self.refresh();
             }
             T_HOVERCHECK => {

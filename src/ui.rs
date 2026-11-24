@@ -37,6 +37,10 @@ pub fn shelf_extra(n: usize) -> f32 {
 /// Alto extra del panel "Hoy" (Pomodoro, agua, clima y calendario).
 pub const TODAY_EXTRA: f32 = 168.0;
 
+/// Alto extra del panel Ask Esme (barra de modo + acciones + input; crece si hay respuesta).
+pub const ASK_BASE_EXTRA: f32 = 76.0;
+pub const ASK_RESP_EXTRA: f32 = 88.0;
+
 pub const CLIP_ROW_H: f32 = 26.0;
 pub const CLIP_ROWS: usize = 5;
 
@@ -65,6 +69,12 @@ pub enum Btn {
     PomoReset,
     WaterAdd,
     WaterSub,
+    Ask,
+    AskMode,
+    AskInput,
+    AskSummarize,
+    AskSpellcheck,
+    AskCopy,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -121,10 +131,28 @@ pub struct Layout {
     pub pomo_reset: R,
     pub water_add: R,
     pub water_sub: R,
+    pub ask_btn: R,
+    pub ask: R,
+    pub ask_mode: R,
+    pub ask_summarize: R,
+    pub ask_spellcheck: R,
+    pub ask_input: R,
+    pub ask_response: R,
+    pub ask_copy: R,
 }
 
 impl Layout {
-    pub fn new(cx: f32, top: f32, d: Dims, media: bool, lyrics: bool, clip: bool, shelf: bool, today: bool) -> Self {
+    pub fn new(
+        cx: f32,
+        top: f32,
+        d: Dims,
+        media: bool,
+        lyrics: bool,
+        clip: bool,
+        shelf: bool,
+        today: bool,
+        ask: bool,
+    ) -> Self {
         // El área de letras ocupa lo que sobre debajo de los controles.
         let x0 = cx - d.w / 2.0;
         let x1 = cx + d.w / 2.0;
@@ -135,24 +163,29 @@ impl Layout {
             let tx = x0 + 94.0;
             l.title = R::new(tx, y0 + 15.0, x1 - 18.0, y0 + 36.0);
             l.artist = R::new(tx, y0 + 36.0, x1 - 18.0, y0 + 54.0);
-            let c = tx + 56.0;
+            let c = tx + 52.0;
             let by = y0 + 70.0;
-            let btn = |x: f32| R::new(x - 17.0, by - 14.0, x + 17.0, by + 14.0);
-            l.prev = btn(c - 44.0);
+            let btn = |x: f32| R::new(x - 16.0, by - 14.0, x + 16.0, by + 14.0);
+            l.prev = btn(c - 40.0);
             l.play = btn(c);
-            l.next = btn(c + 44.0);
-            l.lyrics_btn = btn(x1 - 34.0);
-            l.clip_btn = btn(x1 - 72.0);
-            l.shelf_btn = btn(x1 - 110.0);
-            l.today_btn = btn(x1 - 148.0);
+            l.next = btn(c + 40.0);
+            l.lyrics_btn = btn(x1 - 30.0);
+            l.clip_btn = btn(x1 - 64.0);
+            l.shelf_btn = btn(x1 - 98.0);
+            l.today_btn = btn(x1 - 132.0);
+            l.ask_btn = btn(x1 - 166.0);
+            let sub = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
             if today {
-                l.set_today(R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0));
+                l.set_today(sub);
             }
             if clip {
-                l.clip = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+                l.clip = sub;
             }
             if shelf {
-                l.shelf = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+                l.shelf = sub;
+            }
+            if ask {
+                l.set_ask(sub);
             }
             let ty = y0 + 100.0;
             l.t_left = R::new(x0 + 12.0, ty - 9.0, x0 + 56.0, ty + 9.0);
@@ -165,22 +198,26 @@ impl Layout {
             l.clock = R::new(x0, y0 + 10.0, x1, y0 + 58.0);
             l.date = R::new(x0, y0 + 58.0, x1, y0 + 78.0);
             l.clip_btn = R::new(x1 - 46.0, y0 + 30.0, x1 - 12.0, y0 + 58.0);
+            l.ask_btn = R::new(x1 - 84.0, y0 + 30.0, x1 - 50.0, y0 + 58.0);
             l.shelf_btn = R::new(x0 + 12.0, y0 + 30.0, x0 + 46.0, y0 + 58.0);
             l.today_btn = R::new(x0 + 50.0, y0 + 30.0, x0 + 84.0, y0 + 58.0);
+            let sub = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
             if today {
-                l.set_today(R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0));
+                l.set_today(sub);
             }
             if clip {
-                l.clip = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+                l.clip = sub;
             }
             if shelf {
-                l.shelf = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+                l.shelf = sub;
+            }
+            if ask {
+                l.set_ask(sub);
             }
         }
         l
     }
 
-    /// Qué control hay bajo el punto (x, y). `lyric_scroll` = índice (float) centrado.
     /// Filas y botones del panel "Hoy".
     fn set_today(&mut self, a: R) {
         self.today = a;
@@ -193,6 +230,20 @@ impl Layout {
         self.pomo_reset = b(self.pomo_row, 0.0);
         self.water_sub = b(self.water_row, 1.0);
         self.water_add = b(self.water_row, 0.0);
+    }
+
+    /// Filas y controles del panel "Ask Esme" (Fase 6).
+    fn set_ask(&mut self, a: R) {
+        self.ask = a;
+        let top_y = a.t + 4.0;
+        self.ask_mode = R::new(a.l, top_y, a.l + 104.0, top_y + 22.0);
+        self.ask_summarize = R::new(a.r - 196.0, top_y, a.r - 102.0, top_y + 22.0);
+        self.ask_spellcheck = R::new(a.r - 96.0, top_y, a.r, top_y + 22.0);
+        self.ask_input = R::new(a.l, top_y + 28.0, a.r, top_y + 60.0);
+        if a.b - (top_y + 66.0) > 20.0 {
+            self.ask_response = R::new(a.l, top_y + 66.0, a.r, a.b - 2.0);
+            self.ask_copy = R::new(a.r - 78.0, a.b - 26.0, a.r - 4.0, a.b - 4.0);
+        }
     }
 
     /// Rectángulo del archivo `i` del estante (centrado, hasta SHELF_COLS por fila).
@@ -211,6 +262,24 @@ impl Layout {
         }
         if self.today_btn.inflate(pad).contains(x, y) {
             return Some(Btn::Today);
+        }
+        if self.ask_btn.inflate(pad).contains(x, y) {
+            return Some(Btn::Ask);
+        }
+        if self.ask.r > self.ask.l {
+            if self.ask_copy.r > self.ask_copy.l && self.ask_copy.inflate(2.0).contains(x, y) {
+                return Some(Btn::AskCopy);
+            }
+            for (r, b) in [
+                (self.ask_mode, Btn::AskMode),
+                (self.ask_summarize, Btn::AskSummarize),
+                (self.ask_spellcheck, Btn::AskSpellcheck),
+                (self.ask_input, Btn::AskInput),
+            ] {
+                if r.inflate(2.0).contains(x, y) {
+                    return Some(b);
+                }
+            }
         }
         if self.today.r > self.today.l {
             for (r, b) in [

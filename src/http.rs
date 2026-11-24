@@ -81,6 +81,83 @@ pub fn get(host: &str, path: &str) -> Option<Response> {
     }
 }
 
+/// POST HTTPS con payload JSON usando WinHTTP nativo.
+/// `extra_headers` va tal cual (cada línea terminada en "\r\n"), p. ej. la API key,
+/// para que nunca viaje en la URL.
+pub fn post_json(host: &str, path: &str, extra_headers: &str, json_body: &str) -> Option<Response> {
+    unsafe {
+        let session = Handle(WinHttpOpen(
+            w!("Esme/0.6 (+https://github.com/Maurito2004/Esme)"),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            0,
+        ));
+        if session.0.is_null() {
+            return None;
+        }
+        let _ = WinHttpSetTimeouts(session.0, 5000, 5000, 8000, 15000);
+        let conn = Handle(WinHttpConnect(session.0, &HSTRING::from(host), INTERNET_DEFAULT_HTTPS_PORT, 0));
+        if conn.0.is_null() {
+            return None;
+        }
+        let req = Handle(WinHttpOpenRequest(
+            conn.0,
+            w!("POST"),
+            &HSTRING::from(path),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            std::ptr::null_mut(),
+            WINHTTP_FLAG_SECURE,
+        ));
+        if req.0.is_null() {
+            return None;
+        }
+        let headers: Vec<u16> = format!("Content-Type: application/json; charset=utf-8\r\n{extra_headers}")
+            .encode_utf16()
+            .collect();
+        let headers_slice = headers.as_slice();
+        let bytes = json_body.as_bytes();
+        WinHttpSendRequest(
+            req.0,
+            Some(headers_slice),
+            Some(bytes.as_ptr() as *const _),
+            bytes.len() as u32,
+            bytes.len() as u32,
+            0,
+        )
+        .ok()?;
+        WinHttpReceiveResponse(req.0, std::ptr::null_mut()).ok()?;
+
+        let mut status = 0u32;
+        let mut len = 4u32;
+        WinHttpQueryHeaders(
+            req.0,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            PCWSTR::null(),
+            Some(&mut status as *mut u32 as *mut _),
+            &mut len,
+            std::ptr::null_mut(),
+        )
+        .ok()?;
+
+        let mut body = Vec::new();
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            let mut read = 0u32;
+            WinHttpReadData(req.0, buf.as_mut_ptr() as *mut _, buf.len() as u32, &mut read).ok()?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&buf[..read as usize]);
+            if body.len() > 16 * 1024 * 1024 {
+                return None;
+            }
+        }
+        Some(Response { status, body: String::from_utf8_lossy(&body).into_owned() })
+    }
+}
+
 /// Codificación de URL (RFC 3986) para valores de query.
 pub fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);

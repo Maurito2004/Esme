@@ -42,11 +42,29 @@ pub struct Config {
     /// URL privada iCal (ej. Google Calendar → "Dirección secreta en formato iCal").
     #[nserde(default)]
     pub ical_url: String,
+    /// Modelo de Gemini para Ask Esme y Traductor (por defecto "gemini-2.5-flash").
+    #[nserde(default)]
+    pub gemini_model: String,
+    /// API Key de Gemini cifrada con Windows DPAPI (en hexadecimal, atada al usuario actual de Windows).
+    #[nserde(default)]
+    pub gemini_key_dpapi: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { mascota: true, mascota_tipo: "esme".into(), notch_minimo: false, transparente: false, mover_monitor: true, juegos_extra: Vec::new(), tema_menu: "oscuro".into(), agua_meta: 8, ical_url: String::new() }
+        Self {
+            mascota: true,
+            mascota_tipo: "esme".into(),
+            notch_minimo: false,
+            transparente: false,
+            mover_monitor: true,
+            juegos_extra: Vec::new(),
+            tema_menu: "oscuro".into(),
+            agua_meta: 8,
+            ical_url: String::new(),
+            gemini_model: "gemini-2.5-flash".into(),
+            gemini_key_dpapi: String::new(),
+        }
     }
 }
 
@@ -114,6 +132,9 @@ impl Config {
         if !cfg.mascota {
             cfg.mascota_tipo = "off".into();
         }
+        if cfg.gemini_model.trim().is_empty() {
+            cfg.gemini_model = "gemini-2.5-flash".into();
+        }
         // Asegura que el archivo exista para que "Ajustes" pueda abrirlo.
         if !config_path().exists() {
             let _ = Self::save(&cfg);
@@ -125,6 +146,149 @@ impl Config {
         std::fs::create_dir_all(data_dir())?;
         let json = self.serialize_json();
         std::fs::write(config_path(), json)
+    }
+
+    /// Cifra y guarda la API Key de Gemini con Windows DPAPI (`CryptProtectData`).
+    pub fn set_gemini_api_key(&mut self, plain_key: &str) -> bool {
+        let trimmed = plain_key.trim();
+        if trimmed.is_empty() {
+            self.gemini_key_dpapi.clear();
+            let _ = self.save();
+            return true;
+        }
+        if let Some(enc_hex) = dpapi_encrypt(trimmed.as_bytes()) {
+            self.gemini_key_dpapi = enc_hex;
+            let _ = self.save();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Descifra en memoria la API Key de Gemini con Windows DPAPI (`CryptUnprotectData`).
+    pub fn gemini_api_key(&self) -> Option<String> {
+        if self.gemini_key_dpapi.trim().is_empty() {
+            return None;
+        }
+        let raw = dpapi_decrypt(&self.gemini_key_dpapi)?;
+        String::from_utf8(raw).ok()
+    }
+
+    pub fn has_gemini_key(&self) -> bool {
+        !self.gemini_key_dpapi.trim().is_empty()
+    }
+}
+
+// ---------- Windows DPAPI (CryptProtectData / CryptUnprotectData en crypt32.dll) ----------
+
+#[repr(C)]
+struct CryptDataBlob {
+    cb_data: u32,
+    pb_data: *mut u8,
+}
+
+const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+
+#[link(name = "crypt32")]
+extern "system" {
+    fn CryptProtectData(
+        p_data_in: *const CryptDataBlob,
+        sz_data_descr: PCWSTR,
+        p_optional_entropy: *const CryptDataBlob,
+        pv_reserved: *mut core::ffi::c_void,
+        p_prompt_struct: *mut core::ffi::c_void,
+        dw_flags: u32,
+        p_data_out: *mut CryptDataBlob,
+    ) -> i32;
+
+    fn CryptUnprotectData(
+        p_data_in: *const CryptDataBlob,
+        ppsz_data_descr: *mut PWSTR,
+        p_optional_entropy: *const CryptDataBlob,
+        pv_reserved: *mut core::ffi::c_void,
+        p_prompt_struct: *mut core::ffi::c_void,
+        dw_flags: u32,
+        p_data_out: *mut CryptDataBlob,
+    ) -> i32;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn LocalFree(h_mem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+}
+
+type PWSTR = *mut u16;
+
+fn dpapi_encrypt(plain: &[u8]) -> Option<String> {
+    if plain.is_empty() {
+        return None;
+    }
+    unsafe {
+        let mut buf = plain.to_vec();
+        let input = CryptDataBlob {
+            cb_data: buf.len() as u32,
+            pb_data: buf.as_mut_ptr(),
+        };
+        let mut output = CryptDataBlob {
+            cb_data: 0,
+            pb_data: std::ptr::null_mut(),
+        };
+        let ok = CryptProtectData(
+            &input,
+            w!("EsmeGeminiKey"),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        );
+        if ok == 0 || output.pb_data.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize);
+        let mut hex = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        let _ = LocalFree(output.pb_data as *mut _);
+        Some(hex)
+    }
+}
+
+fn dpapi_decrypt(hex_str: &str) -> Option<Vec<u8>> {
+    let hex = hex_str.trim();
+    if hex.is_empty() || hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut enc = Vec::with_capacity(hex.len() / 2);
+    for i in (0..hex.len()).step_by(2) {
+        let b = u8::from_str_radix(&hex[i..i + 2], 16).ok()?;
+        enc.push(b);
+    }
+    unsafe {
+        let input = CryptDataBlob {
+            cb_data: enc.len() as u32,
+            pb_data: enc.as_mut_ptr(),
+        };
+        let mut output = CryptDataBlob {
+            cb_data: 0,
+            pb_data: std::ptr::null_mut(),
+        };
+        let ok = CryptUnprotectData(
+            &input,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        );
+        if ok == 0 || output.pb_data.is_null() {
+            return None;
+        }
+        let plain = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec();
+        let _ = LocalFree(output.pb_data as *mut _);
+        Some(plain)
     }
 }
 

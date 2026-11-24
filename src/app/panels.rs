@@ -16,6 +16,8 @@ impl App {
             self.lyrics_on = false;
             self.clip_on = false;
             self.today_on = false;
+            self.ask_on = false;
+            self.focus_ask_input(false);
         }
         self.retarget();
         self.refresh();

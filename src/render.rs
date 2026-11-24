@@ -76,6 +76,23 @@ pub struct ClipView<'a> {
     pub copied: Option<usize>,
 }
 
+/// Panel "Ask Esme" + Traductor + Calculadora inline (Fase 6).
+pub struct AskView<'a> {
+    pub mode_label: &'a str,
+    pub is_translate: bool,
+    pub input: &'a str,
+    pub placeholder: &'a str,
+    pub focused: bool,
+    pub caret_on: bool,
+    pub selected_all: bool,
+    /// Resultado inline en vivo si termina en `=` o `timer ...`.
+    pub inline_preview: Option<&'a str>,
+    pub loading: bool,
+    pub response: &'a str,
+    pub copied: bool,
+    pub has_clip: bool,
+}
+
 pub enum Expanded<'a> {
     Clock { time: &'a str, date: &'a str },
     Media(MediaView<'a>),
@@ -104,6 +121,8 @@ pub struct Frame<'a> {
     pub shelf: Option<ShelfView<'a>>,
     /// Panel "Hoy" abierto.
     pub today: Option<TodayView<'a>>,
+    /// Panel "Ask Esme" (Fase 6) abierto.
+    pub ask: Option<AskView<'a>>,
     /// Color de acento: el de los ojos de la mascota (ámbar en Esme, blanco en el gato).
     pub accent: (f32, f32, f32),
 }
@@ -122,6 +141,8 @@ struct Fonts {
     pill_lyric: IDWriteTextFormat,
     tiny: IDWriteTextFormat,
     tile: IDWriteTextFormat,
+    wrap: IDWriteTextFormat,
+    dw: IDWriteFactory,
 }
 
 pub struct Renderer {
@@ -159,6 +180,7 @@ const BLUE: (f32, f32, f32) = (0.27, 0.45, 1.0);
 const G_CLIP: &str = "\u{E77F}";
 const G_SHELF: &str = "\u{E8B7}";
 const G_TODAY: &str = "\u{E787}";
+const G_ASK: &str = "\u{E945}";
 
 impl Renderer {
     pub fn new(hwnd: HWND, width_px: u32, height_px: u32, scale: f32) -> Result<Self> {
@@ -201,6 +223,9 @@ impl Renderer {
             let ui_font = if font_exists(&dw, "Segoe UI Variable Display") { "Segoe UI Variable Display" } else { "Segoe UI" };
             let c = DWRITE_TEXT_ALIGNMENT_CENTER;
             let l = DWRITE_TEXT_ALIGNMENT_LEADING;
+            let wrap = tf(&dw, ui_font, 13.0, DWRITE_FONT_WEIGHT_NORMAL, l)?;
+            wrap.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            wrap.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
             let fonts = Fonts {
                 small: tf(&dw, ui_font, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
                 big: tf(&dw, ui_font, 42.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
@@ -215,6 +240,8 @@ impl Renderer {
                 pill_lyric: tf(&dw, ui_font, 13.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
                 tiny: tf(&dw, ui_font, 9.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, c)?,
                 tile: tf(&dw, ui_font, 11.0, DWRITE_FONT_WEIGHT_NORMAL, c)?,
+                wrap,
+                dw: dw.clone(),
             };
             for f in [&fonts.title, &fonts.artist, &fonts.lyric, &fonts.lyric_cur, &fonts.pill_lyric, &fonts.tile] {
                 let sign = dw.CreateEllipsisTrimmingSign(f)?;
@@ -560,10 +587,150 @@ impl Renderer {
             self.draw_today(tv, l, ap, sh, f.hover)?;
             self.unstagger(rise);
         }
+        let on = f.ask.is_some();
+        self.button(G_ASK, &self.fonts.icon, l.ask_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Ask) || on, sh)?;
+        if let Some(av) = &f.ask {
+            let ap = self.stagger(a, rise);
+            self.draw_ask(av, l, f.accent, ap, sh, f.hover)?;
+            self.unstagger(rise);
+        }
         unsafe {
             self.ctx.SetTransform(&Matrix3x2::identity());
         }
         Ok(())
+    }
+
+    /// Panel Ask Esme (Fase 6): chip de modo (Tab), acciones de portapapeles, input Direct2D con cursor y respuesta.
+    fn draw_ask(&self, av: &AskView, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+        let hv = |b: Btn| hover == Some(b);
+
+        // 1. Chip de Modo (Preguntar / Traducir).
+        let mode_c = if av.is_translate { BLUE } else { accent };
+        let mode_bg = self.brush(mode_c.0, mode_c.1, mode_c.2, (if hv(Btn::AskMode) { 0.32 } else { 0.20 }) * a)?;
+        let mode_border = self.brush(mode_c.0, mode_c.1, mode_c.2, 0.75 * a)?;
+        let mode_rr = D2D1_ROUNDED_RECT { rect: d2r(l.ask_mode), radiusX: 8.0, radiusY: 8.0 };
+        unsafe {
+            self.ctx.FillRoundedRectangle(&mode_rr, &mode_bg);
+            self.ctx.DrawRoundedRectangle(&mode_rr, &mode_border, 1.0, None);
+        }
+        self.label(av.mode_label, &self.fonts.time, l.ask_mode, (1.0, 1.0, 1.0, 0.95 * a), sh)?;
+
+        // 2. Botones rápidos sobre el último texto del portapapeles ("✨ Resumir clip" y "✎ Corregir").
+        let clip_alpha = if av.has_clip { 0.9 } else { 0.38 };
+        for (rect_btn, btn_id, txt) in [
+            (l.ask_summarize, Btn::AskSummarize, "✨ Resumir clip"),
+            (l.ask_spellcheck, Btn::AskSpellcheck, "✎ Corregir"),
+        ] {
+            let bg_a = if hv(btn_id) && av.has_clip { 0.22 } else { 0.10 };
+            let bg = self.brush(1.0, 1.0, 1.0, bg_a * a)?;
+            let rr = D2D1_ROUNDED_RECT { rect: d2r(rect_btn), radiusX: 7.0, radiusY: 7.0 };
+            unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+            self.label(txt, &self.fonts.time, rect_btn, (1.0, 1.0, 1.0, clip_alpha * a), sh)?;
+        }
+
+        // 3. Cuadro de texto nativo en Direct2D.
+        let inp = l.ask_input;
+        if sh {
+            let s = self.brush(0.0, 0.0, 0.0, 0.45 * a)?;
+            let rr = D2D1_ROUNDED_RECT { rect: d2r(inp.inflate(1.0)), radiusX: 9.0, radiusY: 9.0 };
+            unsafe { self.ctx.FillRoundedRectangle(&rr, &s) };
+        }
+        let box_bg = self.brush(1.0, 1.0, 1.0, (if sh { 0.16 } else { 0.09 }) * a)?;
+        let border_c = if av.focused { mode_c } else { (1.0, 1.0, 1.0) };
+        let border_a = if av.focused { 0.85 } else if hv(Btn::AskInput) { 0.4 } else { 0.22 };
+        let box_border = self.brush(border_c.0, border_c.1, border_c.2, border_a * a)?;
+        let inp_rr = D2D1_ROUNDED_RECT { rect: d2r(inp), radiusX: 8.0, radiusY: 8.0 };
+        unsafe {
+            self.ctx.FillRoundedRectangle(&inp_rr, &box_bg);
+            self.ctx.DrawRoundedRectangle(&inp_rr, &box_border, if av.focused { 1.4 } else { 1.0 }, None);
+        }
+
+        let pad_x = inp.l + 10.0;
+        let max_text_w = (inp.r - inp.l - 20.0).max(20.0);
+        let text_r = R::new(pad_x, inp.t, inp.r - 10.0, inp.b);
+
+        if av.input.is_empty() {
+            self.label(av.placeholder, &self.fonts.artist, text_r, (1.0, 1.0, 1.0, 0.42 * a), sh)?;
+            if av.focused && av.caret_on {
+                let caret = self.brush(mode_c.0, mode_c.1, mode_c.2, 0.95 * a)?;
+                let cr = rect(pad_x, inp.t + 7.0, pad_x + 1.6, inp.b - 7.0);
+                unsafe { self.ctx.FillRectangle(&cr, &caret) };
+            }
+        } else {
+            // Si la cadena es muy larga, mostramos la cola visible para que el cursor siempre quede a la vista.
+            let display = tail_fitting(av.input, 58);
+            let tw = self.measure_text_width(&display, &self.fonts.artist, max_text_w);
+            if av.selected_all {
+                let sel_bg = self.brush(BLUE.0, BLUE.1, BLUE.2, 0.38 * a)?;
+                let sr = D2D1_ROUNDED_RECT {
+                    rect: rect(pad_x - 2.0, inp.t + 5.0, (pad_x + tw + 3.0).min(inp.r - 8.0), inp.b - 5.0),
+                    radiusX: 4.0,
+                    radiusY: 4.0,
+                };
+                unsafe { self.ctx.FillRoundedRectangle(&sr, &sel_bg) };
+            }
+            self.label(&display, &self.fonts.artist, text_r, (1.0, 1.0, 1.0, 0.96 * a), sh)?;
+
+            // Vista previa inline en vivo (ej. "= 4725" o "⏱ Enter: 10 min") a la derecha del input.
+            if let Some(prev) = av.inline_preview {
+                let pr = R::new((pad_x + tw + 10.0).min(inp.r - 120.0), inp.t, inp.r - 10.0, inp.b);
+                self.label(prev, &self.fonts.artist, pr, (accent.0, accent.1, accent.2, 0.95 * a), sh)?;
+            }
+
+            if av.focused && av.caret_on {
+                let cx = (pad_x + tw + 1.5).min(inp.r - 10.0);
+                let caret = self.brush(mode_c.0, mode_c.1, mode_c.2, 0.95 * a)?;
+                let cr = rect(cx, inp.t + 7.0, cx + 1.6, inp.b - 7.0);
+                unsafe { self.ctx.FillRectangle(&cr, &caret) };
+            }
+        }
+
+        // 4. Área de respuesta o estado de carga.
+        if l.ask_response.r > l.ask_response.l {
+            let resp_r = l.ask_response;
+            if av.loading {
+                self.label("Pensando…", &self.fonts.artist, R::new(resp_r.l + 4.0, resp_r.t + 4.0, resp_r.r - 4.0, resp_r.t + 26.0), (accent.0, accent.1, accent.2, 0.85 * a), sh)?;
+            } else if !av.response.is_empty() {
+                let bg = self.brush(1.0, 1.0, 1.0, (if sh { 0.14 } else { 0.06 }) * a)?;
+                let rr = D2D1_ROUNDED_RECT { rect: d2r(resp_r), radiusX: 8.0, radiusY: 8.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+
+                let txt_box = R::new(resp_r.l + 8.0, resp_r.t + 5.0, resp_r.r - 8.0, resp_r.b - 24.0);
+                self.label(av.response, &self.fonts.wrap, txt_box, (1.0, 1.0, 1.0, 0.92 * a), sh)?;
+
+                // Botón de copiar respuesta.
+                let cp = l.ask_copy;
+                let cp_bg = self.brush(1.0, 1.0, 1.0, (if hv(Btn::AskCopy) { 0.24 } else { 0.12 }) * a)?;
+                let cp_rr = D2D1_ROUNDED_RECT { rect: d2r(cp), radiusX: 6.0, radiusY: 6.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&cp_rr, &cp_bg) };
+                let (cp_txt, cp_col) = if av.copied {
+                    ("✓ Copiado", (0.55, 0.92, 0.62, a))
+                } else {
+                    ("📋 Copiar", (1.0, 1.0, 1.0, 0.85 * a))
+                };
+                self.label(cp_txt, &self.fonts.time, cp, cp_col, sh)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Mide el ancho exacto en DIPs de un texto con DirectWrite para ubicar el cursor.
+    fn measure_text_width(&self, text: &str, fmt: &IDWriteTextFormat, max_w: f32) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        unsafe {
+            let wide: Vec<u16> = text.encode_utf16().collect();
+            let Ok(layout) = self.fonts.dw.CreateTextLayout(&wide, fmt, max_w, 40.0) else {
+                return 0.0;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_ok() {
+                m.widthIncludingTrailingWhitespace
+            } else {
+                0.0
+            }
+        }
     }
 
     /// Barrita de progreso redondeada.
@@ -1006,4 +1173,14 @@ fn d2r(r: R) -> D2D_RECT_F {
 
 fn rgba(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
+}
+
+fn tail_fitting(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        s.to_string()
+    } else {
+        let tail: String = s.chars().skip(count - max_chars).collect();
+        format!("…{tail}")
+    }
 }

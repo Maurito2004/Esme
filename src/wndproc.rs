@@ -34,9 +34,40 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 LRESULT(0)
             }
             WM_HOTKEY => {
-                if wp.0 as i32 == HOTKEY_OCR {
-                    ocr::start(hwnd);
+                match wp.0 as i32 {
+                    HOTKEY_OCR => ocr::start(hwnd),
+                    HOTKEY_ASK => {
+                        // Con un juego en pantalla completa el atajo no hace nada:
+                        // tomar el foco lo minimizaría. Con clic sí se puede abrir.
+                        with_app(|a| {
+                            if a.ask_on || !a.game_active() {
+                                a.toggle_ask(false);
+                            }
+                        });
+                    }
+                    _ => {}
                 }
+                LRESULT(0)
+            }
+            WM_KEYDOWN => {
+                with_app(|a| a.on_key_down(wp.0 as u32));
+                LRESULT(0)
+            }
+            WM_CHAR => {
+                with_app(|a| a.on_char(wp.0 as u32));
+                LRESULT(0)
+            }
+            WM_KILLFOCUS => {
+                with_app(|a| {
+                    if a.ask.focus {
+                        a.focus_ask_input(false);
+                        a.refresh();
+                    }
+                });
+                LRESULT(0)
+            }
+            ask_esme::WM_ASK_DONE => {
+                with_app(|a| a.on_ask_done());
                 LRESULT(0)
             }
             shelf::WM_SHELF_DRAG => {
@@ -69,7 +100,10 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 with_app(|a| a.on_wheel(wp));
                 LRESULT(0)
             }
-            WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            WM_MOUSEACTIVATE => {
+                let allow_focus = with_app(|a| a.ask_on).unwrap_or(false);
+                LRESULT(if allow_focus { MA_ACTIVATE as isize } else { MA_NOACTIVATE as isize })
+            }
             // Menú de la bandeja dibujado por nosotros (tema oscuro/claro).
             WM_MEASUREITEM if tray::measure_item(lp) => LRESULT(1),
             WM_DRAWITEM if tray::draw_item(lp) => LRESULT(1),
@@ -146,6 +180,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                     dark: a.cfg.tema_menu != "claro",
                                     water_goal: a.cfg.agua_meta,
                                     has_ical: !a.cfg.ical_url.is_empty(),
+                                    has_gemini: a.cfg.has_gemini_key(),
                                 },
                             )
                         });

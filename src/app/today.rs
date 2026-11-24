@@ -21,6 +21,15 @@ impl App {
             inbox.lock().unwrap().weather = Some(res);
             post();
         });
+        if !self.rates.is_fresh() {
+            let inbox = self.inbox.clone();
+            std::thread::spawn(move || {
+                if let Some(r) = calc::refresh_rates_if_needed() {
+                    inbox.lock().unwrap().rates = Some(r);
+                    post();
+                }
+            });
+        }
         let url = self.cfg.ical_url.clone();
         if !url.is_empty() {
             let inbox = self.inbox.clone();
@@ -55,7 +64,10 @@ impl App {
                 Err(e) => self.cal_msg = e,
             }
         }
-        if self.today_on {
+        if let Some(r) = inbox.rates.take() {
+            self.rates = r;
+        }
+        if self.today_on || self.ask_on {
             self.refresh();
         }
     }

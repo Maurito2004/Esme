@@ -10,6 +10,8 @@ extern "C" {}
 
 mod anim;
 mod app;
+mod ask_esme;
+mod calc;
 mod wndproc;
 mod clipboard;
 mod ical;
@@ -33,7 +35,7 @@ use config::Config;
 use lyrics::Lyrics;
 use mascot::{Mascot, Mood};
 use media::{Cmd, MediaInfo};
-use render::{ClipView, ShelfView, TodayView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
+use render::{AskView, ClipView, ShelfView, TodayView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
 use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -75,18 +77,24 @@ const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 const T_TOAST: usize = 14;
 const T_DROPCLOSE: usize = 15;
 const HOTKEY_OCR: i32 = 1;
+const HOTKEY_ASK: i32 = 2;
 const T_OVERLAY: usize = 16;
 const T_POMO: usize = 17;
 const T_DATA: usize = 18;
+/// Cursor parpadeante del input Direct2D (solo activo cuando `ask_on && ask.focus`).
+const T_CARET: usize = 19;
+/// Temporizador rápido lanzado desde el input (`timer 10m`).
+const T_QTIMER: usize = 20;
 /// Clima y calendario se actualizan cada una hora.
 const DATA_REFRESH_MS: u32 = 60 * 60 * 1000;
 const WM_DATA: u32 = WM_APP + 9;
 
-/// Resultados de los hilos de clima y calendario.
+/// Resultados de los hilos de clima, calendario y tasas de cambio.
 #[derive(Default)]
 struct DataInbox {
     weather: Option<std::result::Result<weather::Weather, String>>,
     events: Option<std::result::Result<Vec<ical::Event>, String>>,
+    rates: Option<calc::RatesCache>,
 }
 const OVERLAY_MS: u32 = 1600;
 const WM_POWERBROADCAST: u32 = 0x0218;
@@ -191,6 +199,11 @@ struct App {
     events: Vec<ical::Event>,
     cal_msg: String,
     inbox: Arc<Mutex<DataInbox>>,
+    // Fase 6: Ask Esme, Traductor Rápido, Calculadora/Conversor Inline y Temporizador Rápido.
+    ask_on: bool,
+    ask: ask_esme::AskState,
+    rates: calc::RatesCache,
+    quick_timer: Option<(std::time::Instant, std::time::Duration, String)>,
     // Overlays del sistema (Fase 4).
     overlay: Option<SysOverlay>,
     /// Nivel animado de la barra del overlay (el volumen se desliza al valor nuevo).
@@ -326,6 +339,10 @@ fn main() -> Result<()> {
             events: Vec::new(),
             cal_msg: String::new(),
             inbox: Arc::new(Mutex::new(DataInbox::default())),
+            ask_on: false,
+            ask: ask_esme::AskState::default(),
+            rates: calc::RatesCache::load(),
+            quick_timer: None,
             overlay: None,
             level: Spring::new(0.0, 320.0, 0.05).with_eps(0.002),
             eye_pop: Spring::new(1.0, 260.0, 0.45).with_eps(0.002),
@@ -372,12 +389,14 @@ fn main() -> Result<()> {
         with_app(|a| a.check_fullscreen());
         with_app(|a| a.say_hello());
         let _ = windows::Win32::System::DataExchange::AddClipboardFormatListener(hwnd);
-        // Estante: el notch acepta archivos arrastrados. OCR: atajo global Ctrl+Alt+T.
+        // Estante: el notch acepta archivos arrastrados.
+        // Atajos globales: Ctrl+Alt+T (OCR) y Ctrl+Alt+Space (Ask Esme / Traductor), sin hooks globales.
         let target = shelf::DropTarget::new(hwnd);
         let _ = RegisterDragDrop(hwnd, &target);
         with_app(|a| a._drop_target = Some(target));
-        use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_SPACE};
         let _ = RegisterHotKey(Some(hwnd), HOTKEY_OCR, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32);
+        let _ = RegisterHotKey(Some(hwnd), HOTKEY_ASK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE.0 as u32);
 
         // Overlays del sistema: audio, idioma del teclado y cargador (todo por eventos).
         let audio = system::Audio::new(hwnd);
