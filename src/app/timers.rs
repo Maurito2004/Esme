@@ -25,6 +25,17 @@ impl App {
                 let _ = KillTimer(Some(self.hwnd), T_BLINK);
             }
             self.blink_timer = need_blink;
+            // Ecualizador / Esme pensando: ~10 FPS solo mientras se ven. En reposo, cero timers.
+            let need_anim = self.eq_live() || self.ask_thinking();
+            if need_anim != self.anim_timer {
+                self.anim_timer = need_anim;
+                if need_anim {
+                    SetTimer(Some(self.hwnd), T_ANIM, 100, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), T_ANIM);
+                    self.refresh();
+                }
+            }
         }
         self.schedule_lyric();
     }
@@ -83,7 +94,7 @@ impl App {
 
     pub(crate) fn on_timer(&mut self, id: usize) {
         unsafe {
-            if id != T_PROGRESS && id != T_HOVERCHECK && id != T_POMO && id != T_DATA && id != T_CARET && id != T_QTIMER {
+            if id != T_PROGRESS && id != T_HOVERCHECK && id != T_POMO && id != T_DATA && id != T_CARET && id != T_QTIMER && id != T_ANIM {
                 let _ = KillTimer(Some(self.hwnd), id);
             }
         }
@@ -127,6 +138,13 @@ impl App {
             T_FS => self.check_fullscreen(),
             T_POMO => self.on_pomo_tick(),
             T_QTIMER => self.on_quick_timer_tick(),
+            T_ANIM => {
+                if self.eq_live() || self.ask_thinking() {
+                    self.refresh();
+                } else {
+                    self.update_timers();
+                }
+            }
             T_CARET => {
                 let ask_focused = self.ask_on && self.ask.as_ref().map(|a| a.focus).unwrap_or(false);
                 let todo_focused = self.today_on && self.todo_focus;
@@ -239,7 +257,7 @@ impl App {
                 return;
             }
             let ex = wr.left as f32 + (self.surface_cx() + self.sw.value / 2.0 - 40.0) * self.scale;
-            let ey = wr.top as f32 + 16.0 * self.scale;
+            let ey = wr.top as f32 + (16.0 + self.float_gap()) * self.scale;
             let (dx, dy) = (p.x as f32 - ex, p.y as f32 - ey);
             let dist = (dx * dx + dy * dy).sqrt().max(1.0);
             let reach = 900.0 * self.scale;

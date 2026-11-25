@@ -81,6 +81,7 @@ impl App {
                             row("Tamaño", "Más grande se lee mejor en monitores grandes", Control::Choice(&["100 %", "115 %", "130 %"], size, Key::Tamano)),
                             row("Notch mínimo", "Una línea fina arriba cuando está cerrado", tog(c.notch_minimo, Key::Minimo)),
                             row("Fondo transparente al expandir", "Solo la píldora queda negra; el resto flota sobre tu escritorio", tog(c.transparente, Key::Transparente)),
+                            row("Píldora flotante", "Separada del borde de arriba, con las 4 esquinas redondeadas", tog(c.flotante, Key::Flotante)),
                         ],
                     },
                     Group {
@@ -434,6 +435,15 @@ impl App {
             Key::Mover => return self.on_command(CMD_MOVER),
             Key::Minimo => return self.on_command(CMD_MINIMO),
             Key::Transparente => return self.on_command(CMD_TRANSPARENTE),
+            Key::Flotante => {
+                c.flotante = !c.flotante;
+                let _ = self.cfg.save();
+                self.last_region = (-1, -1, -1);
+                self.layout();
+                self.retarget();
+                self.refresh();
+                return;
+            }
             Key::HoyPomo => c.hoy_pomodoro = !c.hoy_pomodoro,
             Key::HoyAgua => c.hoy_agua = !c.hoy_agua,
             Key::HoyClima => c.hoy_clima = !c.hoy_clima,

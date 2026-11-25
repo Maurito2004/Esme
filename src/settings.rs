@@ -50,6 +50,7 @@ pub enum Key {
     Mover,
     Minimo,
     Transparente,
+    Flotante,
     Pet,
     Tamano,
     Tema,

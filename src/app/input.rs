@@ -8,7 +8,7 @@ impl App {
     pub(crate) fn to_dips(&self, lp: LPARAM) -> (f32, f32) {
         let x = (lp.0 & 0xFFFF) as i16 as f32;
         let y = ((lp.0 >> 16) & 0xFFFF) as i16 as f32;
-        (x / self.scale, y / self.scale)
+        (x / self.scale, y / self.scale - self.float_gap())
     }
 
     pub(crate) fn on_mouse_move(&mut self, lp: LPARAM) {

@@ -27,6 +27,9 @@ pub struct Config {
     /// Al expandir, solo la píldora de arriba queda negra y el contenido flota transparente.
     #[nserde(default)]
     pub transparente: bool,
+    /// Píldora flotante: separada del borde de arriba, con las 4 esquinas redondeadas.
+    #[nserde(default)]
+    pub flotante: bool,
     /// En pantalla completa (juego, video): pasar al otro monitor en vez de solo esconderse.
     #[nserde(default = "true")]
     pub mover_monitor: bool,
@@ -104,6 +107,7 @@ impl Default for Config {
             mascota_tipo: "esme".into(),
             notch_minimo: false,
             transparente: false,
+            flotante: false,
             mover_monitor: true,
             juegos_extra: Vec::new(),
             tema_menu: "oscuro".into(),

@@ -89,6 +89,8 @@ const T_DATA: usize = 18;
 const T_CARET: usize = 19;
 /// Temporizador rápido lanzado desde el input (`timer 10m`).
 const T_QTIMER: usize = 20;
+/// Animaciones vivas (~10 FPS): ecualizador y Esme pensando. Solo corre mientras hacen falta.
+const T_ANIM: usize = 21;
 /// Clima y calendario se actualizan cada una hora.
 const DATA_REFRESH_MS: u32 = 60 * 60 * 1000;
 const WM_DATA: u32 = WM_APP + 9;
@@ -162,6 +164,8 @@ struct App {
     // Ventana y superficie gráfica dinámica (Fase 7).
     monitor: HMONITOR,
     hidden: bool,
+    anim_timer: bool,
+    anim_start: std::time::Instant,
     scale: f32,
     surf_w: f32,
     surf_h: f32,
@@ -323,6 +327,8 @@ fn main() -> Result<()> {
             hover_btn: None,
             monitor: MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY),
             hidden: false,
+            anim_timer: false,
+            anim_start: std::time::Instant::now(),
             scale: 1.0,
             surf_w: CANVAS_W,
             surf_h: CANVAS_H,

@@ -98,6 +98,8 @@ pub struct AskView<'a> {
     pub response: &'a str,
     pub copied: bool,
     pub has_clip: bool,
+    /// Ojitos de la mascota en el panel (miran el input al escribir, "piensan" al esperar).
+    pub pet: Option<(Eyes, Pet)>,
 }
 
 pub enum Expanded<'a> {
@@ -132,6 +134,10 @@ pub struct Frame<'a> {
     pub ask: Option<AskView<'a>>,
     /// Color de acento: el de los ojos de la mascota (ámbar en Esme, blanco en el gato).
     pub accent: (f32, f32, f32),
+    /// Píldora flotante: separación (DIPs) con el borde de arriba; 0 = pegada (notch clásico).
+    pub float_gap: f32,
+    /// Ecualizador vivo: segundos desde que arrancó la animación (None = barras quietas).
+    pub eq_t: Option<f32>,
     /// Vista activa del panel expandido (para los puntitos indicadores de página).
     pub active_page: usize,
 }
@@ -171,6 +177,8 @@ pub struct Renderer {
     art_changed: Option<std::time::Instant>,
     /// Color predominante de la carátula actual (para el aura del borde).
     art_color: Option<(f32, f32, f32)>,
+    /// Desplazamiento vertical de todo el dibujo (píldora flotante).
+    oy: f32,
     /// ID de la carátula cargada (0 = ninguna). Nunca retenemos el Vec<u8> original en RAM.
     art_id: u64,
     width_px: u32,
@@ -281,6 +289,7 @@ impl Renderer {
                 prev_art: None,
                 art_changed: None,
                 art_color: None,
+                oy: 0.0,
                 art_id: 0,
                 width_px,
                 height_px,
@@ -440,10 +449,16 @@ impl Renderer {
     pub fn draw(&mut self, f: &Frame, vsync: bool) -> Result<()> {
         unsafe {
             self.ctx.BeginDraw();
+            self.oy = f.float_gap;
             self.ctx.SetTransform(&Matrix3x2::identity());
             self.ctx.Clear(Some(&rgba(0.0, 0.0, 0.0, 0.0)));
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy));
 
-            let geo = self.notch_geometry(f.cx, f.shape_w, f.shape_h, f.radius, f.ear)?;
+            let geo = if f.float_gap > 0.0 {
+                self.pill_geometry(f.cx, f.shape_w, f.shape_h, f.radius)?
+            } else {
+                self.notch_geometry(f.cx, f.shape_w, f.shape_h, f.radius, f.ear)?
+            };
             let black = self.brush(0.0, 0.0, 0.0, 1.0)?;
             self.ctx.FillGeometry(&geo, &black, None);
 
@@ -509,8 +524,18 @@ impl Renderer {
                 } else {
                     self.label(G_MUSIC, &self.fonts.icon, art, (1.0, 1.0, 1.0, 0.8 * a), false)?;
                 }
-                let accent = self.brush(0.55, 0.85, 0.6, 0.95 * a)?;
-                for (i, bh) in [8.0f32, 14.0, 10.0, 5.0].iter().enumerate() {
+                // Ecualizador: con música sonando las barras bailan (~10 FPS) con el color de la carátula.
+                let (er, eg, eb) = self.art_color.map(|c| boost(c)).unwrap_or((0.55, 0.85, 0.6));
+                let accent = self.brush(er, eg, eb, 0.95 * a)?;
+                let mut heights = [8.0f32, 14.0, 10.0, 5.0];
+                if let Some(t) = f.eq_t {
+                    const SPD: [(f32, f32, f32); 4] = [(7.1, 2.3, 0.0), (9.4, 3.1, 1.7), (6.3, 4.2, 3.1), (8.2, 1.9, 4.6)];
+                    for (i, (w1, w2, ph)) in SPD.iter().enumerate() {
+                        let v = 0.5 + 0.5 * (t * w1 + ph).sin() * (0.65 + 0.35 * (t * w2 + ph * 0.5).sin());
+                        heights[i] = 4.0 + 12.0 * v.clamp(0.0, 1.0);
+                    }
+                }
+                for (i, bh) in heights.iter().enumerate() {
                     let x = right - 34.0 + i as f32 * 5.0;
                     let rr = D2D1_ROUNDED_RECT { rect: rect(x, h / 2.0 - bh / 2.0, x + 3.0, h / 2.0 + bh / 2.0), radiusX: 1.5, radiusY: 1.5 };
                     unsafe { self.ctx.FillRoundedRectangle(&rr, &accent) };
@@ -552,7 +577,7 @@ impl Renderer {
     fn draw_expanded(&self, f: &Frame, a: f32) -> Result<()> {
         let rise = (1.0 - a) * 8.0;
         unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, -rise));
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy - rise));
         }
         let sh = f.transparent;
         let l = &f.layout;
@@ -646,7 +671,7 @@ impl Renderer {
         }
         self.draw_page_dots(l, f.active_page, f.accent, a, sh, f.hover)?;
         unsafe {
-            self.ctx.SetTransform(&Matrix3x2::identity());
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy));
         }
         Ok(())
     }
@@ -665,6 +690,12 @@ impl Renderer {
             self.ctx.DrawRoundedRectangle(&mode_rr, &mode_border, 1.0, None);
         }
         self.label(av.mode_label, &self.fonts.time, l.ask_mode, (1.0, 1.0, 1.0, 0.95 * a), sh)?;
+        if let Some((eyes, pet)) = av.pet {
+            let ex = (l.ask_mode.r + l.ask_summarize.l) / 2.0;
+            if l.ask_summarize.l - l.ask_mode.r > 40.0 {
+                self.draw_pet(ex, l.ask_mode.cy(), eyes, pet, a)?;
+            }
+        }
 
         // 2. Botones rápidos sobre el último texto del portapapeles ("✨ Resumir clip" y "✎ Corregir").
         let clip_alpha = if av.has_clip { 0.9 } else { 0.38 };
@@ -1222,14 +1253,14 @@ impl Renderer {
     fn stagger(&self, a: f32, rise: f32) -> f32 {
         let ap = clamp01((a - 0.35) / 0.65);
         unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, -rise + (1.0 - ap) * 10.0));
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy - rise + (1.0 - ap) * 10.0));
         }
         ap
     }
 
     fn unstagger(&self, rise: f32) {
         unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, -rise));
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy - rise));
         }
     }
 
@@ -1310,6 +1341,30 @@ impl Renderer {
 
     /// Forma de notch: pegada al borde superior, con "orejas" cóncavas arriba
     /// y esquinas inferiores redondeadas.
+    /// Píldora flotante: rectángulo con las 4 esquinas redondeadas (sin orejas).
+    fn pill_geometry(&self, cx: f32, w: f32, h: f32, radius: f32) -> Result<ID2D1PathGeometry1> {
+        let h = h.max(1.0);
+        let r = if h <= 40.0 { h / 2.0 } else { radius.max(16.0) }.min(h / 2.0).min(w / 2.0).max(0.0);
+        let l = cx - w / 2.0;
+        let rt = cx + w / 2.0;
+        unsafe {
+            let geo = self.d2d_factory.CreatePathGeometry()?;
+            let sink = geo.Open()?;
+            sink.BeginFigure(pt(l, r), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(l, h - r));
+            sink.AddArc(&arc(pt(l + r, h), r));
+            sink.AddLine(pt(rt - r, h));
+            sink.AddArc(&arc(pt(rt, h - r), r));
+            sink.AddLine(pt(rt, r));
+            sink.AddArc(&arc(pt(rt - r, 0.0), r));
+            sink.AddLine(pt(l + r, 0.0));
+            sink.AddArc(&arc(pt(l, r), r));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.Close()?;
+            Ok(geo)
+        }
+    }
+
     fn notch_geometry(&self, cx: f32, w: f32, h: f32, radius: f32, ear: f32) -> Result<ID2D1PathGeometry1> {
         let h = h.max(1.0);
         let ear = ear.min(h * 0.5).max(0.0);
@@ -1373,6 +1428,13 @@ pub(crate) fn tf(dw: &IDWriteFactory, family: &str, size: f32, weight: DWRITE_FO
         f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         Ok(f)
     }
+}
+
+/// Aviva un color de carátula para que las barras se vean sobre el negro.
+fn boost(c: (f32, f32, f32)) -> (f32, f32, f32) {
+    let m = c.0.max(c.1).max(c.2).max(0.05);
+    let k = (0.85 / m).max(1.0);
+    ((c.0 * k).min(1.0), (c.1 * k).min(1.0), (c.2 * k).min(1.0))
 }
 
 fn arc(end: Vector2, r: f32) -> D2D1_ARC_SEGMENT {

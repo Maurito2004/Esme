@@ -20,7 +20,7 @@ impl App {
             let c = self.collapsed_dims();
             // Margen exacto para orejas cóncavas + borde de 1.5 DIP sin reservar 520×340 en VRAM.
             let w = (c.w + 36.0).clamp(180.0, CANVAS_W);
-            let h = (c.h + 14.0).clamp(24.0, CANVAS_H);
+            let h = (c.h + 14.0 + self.float_gap()).clamp(24.0, CANVAS_H);
             (w, h)
         }
     }
@@ -99,7 +99,7 @@ impl App {
         let cx = self.surface_cx();
         let mut l = cx - shape_w / 2.0 - ear;
         let mut r = cx + shape_w / 2.0 + ear;
-        let mut b = shape_h;
+        let mut b = shape_h + self.float_gap();
         if self.cfg.transparente && (self.expand.value > 0.02 || self.expand.target > 0.5) {
             let area = self.layout_now().area;
             l = l.min(area.l);
@@ -225,6 +225,8 @@ impl App {
             mascot_vis: self.mascot_vis.value,
             accent: (self.aura[0].value, self.aura[1].value, self.aura[2].value),
             active_page: self.active_page(),
+            float_gap: self.float_gap(),
+            eq_t: if self.anim_timer && self.eq_live() { Some(self.anim_start.elapsed().as_secs_f32()) } else { None },
             clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
             shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
             today: if self.today_on {
@@ -263,6 +265,25 @@ impl App {
                     response: &ask.response,
                     copied: ask.copied_feedback,
                     has_clip: !self.clip.items.is_empty(),
+                    pet: self.cfg.pet().map(|p| {
+                        let mut e = self.mascot.eyes();
+                        e.scale = 1.0;
+                        if ask.loading {
+                            // Pensando: mira arriba y de lado a lado, despacito.
+                            let t = self.anim_start.elapsed().as_secs_f32();
+                            e.gaze = ((t * 2.2).sin() * 1.6, -1.3);
+                        } else if ask.focus && !ask.input.is_empty() {
+                            // Escribiendo: mira hacia el input.
+                            e.gaze = (0.0, 1.6);
+                        } else {
+                            e.gaze = (0.0, 0.0);
+                        }
+                        if e.mood == Mood::Asleep {
+                            e.open = 1.0;
+                            e.mood = Mood::Awake;
+                        }
+                        (e, p)
+                    }),
                 })
             } else {
                 None

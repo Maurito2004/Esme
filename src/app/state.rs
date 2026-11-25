@@ -20,6 +20,29 @@ impl App {
         }
     }
 
+    /// Separación (DIPs) entre el borde de arriba y la píldora flotante.
+    pub(crate) fn float_gap(&self) -> f32 {
+        if self.cfg.flotante { 7.0 } else { 0.0 }
+    }
+
+    /// Ecualizador vivo: música sonando y la píldora contraída mostrando la carátula.
+    pub(crate) fn eq_live(&self) -> bool {
+        !self.hidden
+            && self.playing()
+            && !self.want_expanded()
+            && self.overlay.is_none()
+            && self.toast.is_none()
+            && self.quick_timer.is_none()
+            && !self.pomo_pill()
+            && !self.lyric_pill()
+            && !self.cfg.notch_minimo
+    }
+
+    /// Esme "pensando" mientras Gemini responde.
+    pub(crate) fn ask_thinking(&self) -> bool {
+        self.ask_on && self.ask.as_ref().map(|a| a.loading).unwrap_or(false)
+    }
+
     pub(crate) fn want_expanded(&self) -> bool {
         self.hover || self.pinned || self.drop_open || self.ask_on || self.todo_focus
     }
