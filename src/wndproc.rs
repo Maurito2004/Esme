@@ -7,6 +7,10 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
         match msg {
             WM_MOUSEMOVE => {
                 let drag = with_app(|a| {
+                    if a.mixer_drag.is_some() {
+                        a.mixer_drag_move(wp, lp);
+                        return None;
+                    }
                     a.on_mouse_move(lp);
                     a.drag_candidate(wp, lp)
                 })
@@ -18,7 +22,12 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 LRESULT(0)
             }
             WM_LBUTTONDOWN => {
-                with_app(|a| a.on_mouse_down(lp));
+                with_app(|a| {
+                    let (x, y) = a.to_dips(lp);
+                    if !a.mixer_press(x, y) {
+                        a.on_mouse_down(lp);
+                    }
+                });
                 LRESULT(0)
             }
             WM_RBUTTONUP => {
@@ -92,6 +101,10 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             }
             WM_LBUTTONUP => {
                 with_app(|a| {
+                    // El mezclador ya aplicó el volumen al apretar y al arrastrar.
+                    if a.mixer_release() {
+                        return;
+                    }
                     // Si hubo arrastre, `press` ya se limpió y no es un clic.
                     let pressed = a.press.take();
                     let (x, y) = a.to_dips(lp);

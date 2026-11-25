@@ -80,6 +80,8 @@ pub struct ShelfView<'a> {
 /// Mezclador: (nombre, volumen 0..1, silenciado).
 pub struct MixerView<'a> {
     pub rows: &'a [(String, f32, bool)],
+    /// Fila que se está arrastrando (muestra la perilla aunque el mouse se salga).
+    pub drag: Option<usize>,
 }
 
 pub struct ClipView<'a> {
@@ -1117,7 +1119,7 @@ impl Renderer {
         }
         for (i, (name, level, muted)) in mv.rows.iter().enumerate().take(l.mixer_n) {
             let row = l.mixer_row(i);
-            let hot = matches!(hover, Some(Btn::MixerBar(j) | Btn::MixerMute(j)) if j == i);
+            let hot = mv.drag == Some(i) || (mv.drag.is_none() && matches!(hover, Some(Btn::MixerBar(j) | Btn::MixerMute(j)) if j == i));
             if hot {
                 let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.16 } else { 0.07 } * a)?;
                 let rr = D2D1_ROUNDED_RECT { rect: d2r(row), radiusX: 8.0, radiusY: 8.0 };
@@ -1131,13 +1133,14 @@ impl Renderer {
             let na = if i == 0 { 0.95 } else { 0.8 };
             self.label(name, &self.fonts.artist, name_r, (1.0, 1.0, 1.0, na * a), sh)?;
             let bar = l.mixer_bar(i);
-            let v = if *muted { 0.0 } else { level.clamp(0.0, 1.0) };
+            let v = level.clamp(0.0, 1.0);
             let c = if i == 0 { accent } else { BLUE };
             self.bar(bar, v, c, a)?;
             if hot {
                 let x = bar.l + (bar.r - bar.l) * v;
                 let knob = self.brush(1.0, 1.0, 1.0, 0.95 * a)?;
-                let e = D2D1_ELLIPSE { point: pt(x, bar.cy()), radiusX: 5.5, radiusY: 5.5 };
+                let rad = if mv.drag == Some(i) { 7.0 } else { 5.5 };
+                let e = D2D1_ELLIPSE { point: pt(x, bar.cy()), radiusX: rad, radiusY: rad };
                 unsafe { self.ctx.FillEllipse(&e, &knob) };
             }
             let pct = format!("{}%", (v * 100.0).round() as i32);

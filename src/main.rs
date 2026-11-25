@@ -214,6 +214,10 @@ struct App {
     todo: todo::TodoList,
     mixer_on: bool,
     mixer: mixer::Mixer,
+    /// Barritas del mezclador animadas (lo que se dibuja; el valor real está en `mixer`).
+    mixer_vis: Vec<Spring>,
+    /// Fila que se está arrastrando.
+    mixer_drag: Option<usize>,
     todo_input: String,
     todo_focus: bool,
     todo_caret: bool,
@@ -370,6 +374,8 @@ fn main() -> Result<()> {
             todo: todo::TodoList::load(),
             mixer_on: false,
             mixer: mixer::Mixer::default(),
+            mixer_vis: Vec::new(),
+            mixer_drag: None,
             todo_input: String::new(),
             todo_focus: false,
             todo_caret: false,

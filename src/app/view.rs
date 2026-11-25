@@ -140,8 +140,13 @@ impl App {
         let events = self.event_lines();
         let tiles: Vec<(&'static str, String)> =
             self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
-        let mixer_rows: Vec<(String, f32, bool)> =
-            self.mixer.channels.iter().map(|c| (c.name.clone(), c.level, c.muted)).collect();
+        let mixer_rows: Vec<(String, f32, bool)> = self
+            .mixer
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.name.clone(), self.mixer_vis.get(i).map(|s| s.value).unwrap_or(c.level), c.muted))
+            .collect();
         let pomo_text = self.pomo.text();
         let qtimer = self.quick_timer_status();
         let qtimer_text = qtimer.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
@@ -253,7 +258,7 @@ impl App {
             } else {
                 None
             },
-            mixer: if self.mixer_on { Some(MixerView { rows: &mixer_rows }) } else { None },
+            mixer: if self.mixer_on { Some(MixerView { rows: &mixer_rows, drag: self.mixer_drag }) } else { None },
             ask: if self.ask_on {
                 self.ask.as_ref().map(|ask| AskView {
                     mode_label: ask.mode.label(),

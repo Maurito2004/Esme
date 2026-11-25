@@ -239,16 +239,12 @@ impl App {
             Btn::Ask => self.toggle_ask(false),
             Btn::Mixer => self.toggle_mixer(!self.mixer_on),
             Btn::MixerBar(i) => {
-                let bar = layout.mixer_bar(i);
-                let v = ((x - bar.l) / (bar.r - bar.l).max(1.0)).clamp(0.0, 1.0);
-                // Imán en los extremos: fácil llegar a 0 % y 100 %.
-                let v = if v < 0.03 { 0.0 } else if v > 0.97 { 1.0 } else { v };
-                self.mixer.set_level(i, v);
-                self.refresh();
+                let v = self.mixer_level_at(i, x);
+                self.mixer_set(i, v);
             }
             Btn::MixerMute(i) => {
                 self.mixer.toggle_mute(i);
-                self.refresh();
+                self.mixer_follow(i);
             }
             Btn::AskMode => {
                 let ask = self.ask_mut();
@@ -353,6 +349,18 @@ impl App {
     pub(crate) fn toggle_mixer(&mut self, on: bool) {
         if on {
             self.mixer = mixer::Mixer::read();
+            // Las barritas arrancan en 0 y "se llenan" hasta el volumen real al abrir.
+            self.mixer_vis = self
+                .mixer
+                .channels
+                .iter()
+                .map(|c| {
+                    let mut s = Spring::new(0.0, 260.0, 0.12).with_eps(0.002);
+                    s.set_target(if c.muted { 0.0 } else { c.level });
+                    s
+                })
+                .collect();
+            self.mixer_drag = None;
             self.mixer_on = true;
             self.lyrics_on = false;
             self.clip_on = false;
@@ -364,9 +372,79 @@ impl App {
         } else {
             self.mixer_on = false;
             self.mixer.clear();
+            self.mixer_vis.clear();
+            self.mixer_drag = None;
         }
         self.retarget();
         self.refresh();
+    }
+
+    /// Cambia el volumen real de la fila `i` y anima su barrita hasta ahí.
+    pub(crate) fn mixer_set(&mut self, i: usize, v: f32) {
+        self.mixer.set_level(i, v);
+        self.mixer_follow(i);
+    }
+
+    /// La barrita `i` sigue al valor real (0 si está en silencio).
+    pub(crate) fn mixer_follow(&mut self, i: usize) {
+        let target = self.mixer.channels.get(i).map(|c| if c.muted { 0.0 } else { c.level }).unwrap_or(0.0);
+        let was = self.is_animating();
+        if let Some(s) = self.mixer_vis.get_mut(i) {
+            s.set_target(target);
+        }
+        if !was {
+            self.last_tick = self.now();
+        }
+        self.refresh();
+    }
+
+    /// Volumen según la posición x sobre la barra de la fila `i` (con imán en 0 % y 100 %).
+    pub(crate) fn mixer_level_at(&self, i: usize, x: f32) -> f32 {
+        let bar = self.layout_now().mixer_bar(i);
+        let v = ((x - bar.l) / (bar.r - bar.l).max(1.0)).clamp(0.0, 1.0);
+        if v < 0.03 { 0.0 } else if v > 0.97 { 1.0 } else { v }
+    }
+
+    /// Botón apretado sobre una barrita: empieza a arrastrar (el mouse queda capturado).
+    pub(crate) fn mixer_press(&mut self, x: f32, y: f32) -> bool {
+        if !self.mixer_on || self.expand.value < 0.6 {
+            return false;
+        }
+        let hit = self.layout_now().hit(x, y, 0.0, 0, 0, 0, 0, self.active_page());
+        let Some(Btn::MixerBar(i)) = hit else { return false };
+        self.mixer_drag = Some(i);
+        unsafe {
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.hwnd);
+        }
+        let v = self.mixer_level_at(i, x);
+        self.mixer_set(i, v);
+        true
+    }
+
+    /// Arrastrando: la barrita sigue al mouse en vivo.
+    pub(crate) fn mixer_drag_move(&mut self, wp: WPARAM, lp: LPARAM) {
+        let Some(i) = self.mixer_drag else { return };
+        if wp.0 & 0x0001 == 0 {
+            self.mixer_release();
+            return;
+        }
+        let (x, _) = self.to_dips(lp);
+        let v = self.mixer_level_at(i, x);
+        if self.mixer.channels.get(i).map(|c| (c.level - v).abs() > 0.004).unwrap_or(false) {
+            self.mixer_set(i, v);
+        }
+    }
+
+    /// Soltó el botón: termina el arrastre. Devuelve true si estaba arrastrando.
+    pub(crate) fn mixer_release(&mut self) -> bool {
+        if self.mixer_drag.take().is_none() {
+            return false;
+        }
+        unsafe {
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+        }
+        self.refresh();
+        true
     }
 
     fn select_page(&mut self, page: usize) {
@@ -438,8 +516,7 @@ impl App {
             if let Some(Btn::MixerBar(i) | Btn::MixerMute(i)) = self.hover_btn {
                 if let Some(cur) = self.mixer.channels.get(i).map(|c| c.level) {
                     let step = if delta > 0 { 0.05 } else { -0.05 };
-                    self.mixer.set_level(i, ((cur + step) * 20.0).round() / 20.0);
-                    self.refresh();
+                    self.mixer_set(i, ((cur + step) * 20.0).round() / 20.0);
                 }
                 return;
             }

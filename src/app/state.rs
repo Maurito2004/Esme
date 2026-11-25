@@ -196,7 +196,8 @@ impl App {
             && self.lyric_scroll.is_settled()
             && self.level.is_settled()
             && self.eye_pop.is_settled()
-            && self.aura.iter().all(|s| s.is_settled()))
+            && self.aura.iter().all(|s| s.is_settled())
+            && self.mixer_vis.iter().all(|s| s.is_settled()))
             || self.mascot.hopping()
             || self.renderer.as_ref().map(|r| r.animating()).unwrap_or(false)
     }
@@ -279,6 +280,9 @@ impl App {
             s.step(dt);
         }
         for s in self.aura.iter_mut() {
+            s.step(dt);
+        }
+        for s in self.mixer_vis.iter_mut() {
             s.step(dt);
         }
         self.redraw_with(true);
