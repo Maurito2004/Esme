@@ -34,9 +34,8 @@ fn path() -> PathBuf {
 
 impl TodoList {
     pub fn load() -> Self {
-        std::fs::read_to_string(path())
-            .ok()
-            .and_then(|s| TodoList::deserialize_json(s.trim_start_matches('\u{feff}')).ok())
+        crate::config::read_text(&path())
+            .and_then(|s| TodoList::deserialize_json(&s).ok())
             .unwrap_or_default()
     }
 

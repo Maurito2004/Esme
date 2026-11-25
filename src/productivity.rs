@@ -128,9 +128,8 @@ pub fn current_hour() -> usize {
 
 impl Water {
     pub fn load() -> Self {
-        let w: Water = std::fs::read_to_string(water_path())
-            .ok()
-            .and_then(|s| Water::deserialize_json(s.trim_start_matches('\u{feff}')).ok())
+        let w: Water = crate::config::read_text(&water_path())
+            .and_then(|s| Water::deserialize_json(&s).ok())
             .unwrap_or_default();
         w.for_today()
     }

@@ -151,6 +151,28 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
+fn backup_path() -> PathBuf {
+    data_dir().join("config.bak.json")
+}
+
+/// Lee y valida un archivo de configuración. Si existe pero está ocupado, reintenta hasta ~3 s.
+fn read_config(path: &std::path::Path) -> Option<Config> {
+    read_text(path).and_then(|s| Config::deserialize_json(&s).ok())
+}
+
+/// Lee un archivo de datos de Esme. Si existe pero está ocupado (antivirus, limpiador, inicio de
+/// Windows), reintenta hasta ~3 s en vez de rendirse y arrancar con datos vacíos.
+pub fn read_text(path: &std::path::Path) -> Option<String> {
+    for _ in 0..15 {
+        match std::fs::read_to_string(path) {
+            Ok(s) => return Some(s.trim_start_matches('\u{feff}').to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    }
+    None
+}
+
 /// Al arrancar: traemos los datos de %APPDATA%\Noosa y el inicio automático.
 pub fn migrate_from_noosa() {
     let new = data_dir();
@@ -198,9 +220,11 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        let cfg = std::fs::read_to_string(config_path())
-            .ok()
-            .and_then(|s| Config::deserialize_json(s.trim_start_matches('\u{feff}')).ok())
+        // Al prender la PC, el antivirus o un limpiador pueden tener el archivo ocupado un instante:
+        // reintentamos y, si el archivo está dañado, usamos la copia de respaldo. Nunca la de fábrica
+        // mientras exista una configuración guardada que se pueda leer.
+        let cfg = read_config(&config_path())
+            .or_else(|| read_config(&backup_path()))
             .unwrap_or_default();
         let mut cfg: Config = cfg;
         if !cfg.mascota {
@@ -237,10 +261,17 @@ impl Config {
         cfg
     }
 
+    /// Guardado seguro: escribe un archivo temporal y lo reemplaza de una sola vez, así un apagado
+    /// a mitad de camino no deja `config.json` cortado. La versión anterior queda como respaldo.
     pub fn save(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(data_dir())?;
-        let json = self.serialize_json();
-        std::fs::write(config_path(), json)
+        let path = config_path();
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, self.serialize_json())?;
+        if read_config(&path).is_some() {
+            let _ = std::fs::copy(&path, backup_path());
+        }
+        std::fs::rename(&tmp, &path)
     }
 
     /// Cifra y guarda la API Key de Gemini con Windows DPAPI (`CryptProtectData`).
@@ -430,6 +461,21 @@ pub fn set_autostart(enable: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guarda_y_lee_con_respaldo() {
+        let dir = std::env::temp_dir().join(format!("esme-cfg-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("c.json");
+        assert!(read_config(&p).is_none());
+        std::fs::write(&p, "{\"ciudad\":\"Córd").unwrap(); // archivo cortado
+        assert!(read_config(&p).is_none());
+        let mut c = Config::default();
+        c.ciudad = "Córdoba".into();
+        std::fs::write(&p, c.serialize_json()).unwrap();
+        assert_eq!(read_config(&p).unwrap().ciudad, "Córdoba");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn lee_config_completa() {

@@ -35,7 +35,7 @@ fn path() -> std::path::PathBuf {
 impl Shelf {
     pub fn load() -> Self {
         let mut s: Shelf =
-            std::fs::read_to_string(path()).ok().and_then(|s| Shelf::deserialize_json(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_default();
+            crate::config::read_text(&path()).and_then(|s| Shelf::deserialize_json(&s).ok()).unwrap_or_default();
         // Si un archivo se borró o movió desde la última vez, lo sacamos.
         s.items.retain(|p| std::path::Path::new(p).exists());
         s
