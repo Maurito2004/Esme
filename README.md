@@ -202,3 +202,7 @@ Esme solo se conecta a internet cuando usás algo que lo necesita: lrclib.net (l
 y Open-Meteo (clima), tu calendario de Google (si pegaste la dirección), dolarapi.com y las tasas
 de cambio (monedas en Ask), Gemini (solo con tu key) y GitHub (solo al tocar "Buscar
 actualizaciones").
+
+## Licencia
+
+[MIT](LICENSE): podés usar, copiar, modificar y compartir Esme libremente, manteniendo el aviso de copyright.
