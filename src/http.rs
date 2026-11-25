@@ -24,11 +24,13 @@ pub fn get(host: &str, path: &str) -> Option<Response> {
     get_with_headers(host, path, "")
 }
 
+const USER_AGENT: &str = concat!("Esme/", env!("CARGO_PKG_VERSION"), " (+https://github.com/Maurito2004/Esme)");
+
 /// Igual que `get`, con encabezados extra (cada línea terminada en CRLF), p. ej. una API key.
 pub fn get_with_headers(host: &str, path: &str, extra_headers: &str) -> Option<Response> {
     unsafe {
         let session = Handle(WinHttpOpen(
-            w!("Esme/0.5 (+https://github.com/Maurito2004/Esme)"),
+            &HSTRING::from(USER_AGENT),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),
@@ -94,7 +96,7 @@ pub fn get_with_headers(host: &str, path: &str, extra_headers: &str) -> Option<R
 pub fn post_json(host: &str, path: &str, extra_headers: &str, json_body: &str, recv_timeout_ms: i32) -> Option<Response> {
     unsafe {
         let session = Handle(WinHttpOpen(
-            w!("Esme/0.6 (+https://github.com/Maurito2004/Esme)"),
+            &HSTRING::from(USER_AGENT),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),
