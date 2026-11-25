@@ -18,12 +18,12 @@ BEGIN
     BEGIN
         BLOCK "2c0a04b0"
         BEGIN
-            VALUE "CompanyName", "Esme"
+            VALUE "CompanyName", "Maurito2004 (github.com/Maurito2004/Esme)"
             VALUE "FileDescription", "Esme - barra dinamica para Windows"
             VALUE "FileVersion", "1.0.1"
             VALUE "InternalName", "esme"
-            VALUE "LegalCopyright", "Uso personal"
-            VALUE "OriginalFilename", "esme.exe"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Maurito2004. MIT License."
+            VALUE "OriginalFilename", "Esme.exe"
             VALUE "ProductName", "Esme"
             VALUE "ProductVersion", "1.0.1"
         END

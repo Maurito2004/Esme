@@ -203,6 +203,21 @@ y Open-Meteo (clima), tu calendario de Google (si pegaste la dirección), dolara
 de cambio (monedas en Ask), Gemini (solo con tu key) y GitHub (solo al tocar "Buscar
 actualizaciones").
 
+## Firma de código
+
+Política de firma de código: las versiones publicadas en *Releases* se compilan en GitHub Actions a partir
+de este repositorio y, una vez aprobado el proyecto, se firman con el servicio gratuito
+[SignPath.io](https://about.signpath.io), con un certificado de
+[SignPath Foundation](https://signpath.org).
+
+- Autor y aprobador de las firmas: [Maurito2004](https://github.com/Maurito2004).
+- Solo se firma lo que sale de este repositorio a través del workflow `release.yml`; nada compilado a mano.
+- Privacidad: Esme no tiene telemetría. Solo se conecta a los servicios que usan sus funciones (letras,
+  clima, calendario que vos configures, Gemini si cargás tu API Key) y a la API pública de GitHub para
+  avisar de actualizaciones.
+
+Cómo se configura: [docs/signpath/README.md](docs/signpath/README.md).
+
 ## Licencia
 
 [MIT](LICENSE): podés usar, copiar, modificar y compartir Esme libremente, manteniendo el aviso de copyright.

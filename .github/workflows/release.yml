@@ -2,6 +2,10 @@
 # para usar cada vez que se sube un tag de versión (v1.2.3).
 #   git tag -a v0.4.0 -m "..." && git push origin v0.4.0
 # Las notas de la versión se leen de docs/release-notes/<tag>.md.
+#
+# Firma de código (SignPath Foundation): el exe se firma cuando existen la variable
+# SIGNPATH_ORGANIZATION_ID y el secreto SIGNPATH_API_TOKEN del repo. Mientras no estén,
+# el paso se saltea y se publica sin firmar, como antes. Cómo configurarlo: docs/signpath/README.md
 name: Release
 
 on:
@@ -11,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # SignPath descarga el artefacto sin firmar de esta ejecución
 
 jobs:
   build:
@@ -33,12 +38,41 @@ jobs:
         shell: pwsh
         run: cargo test --release --locked
 
+      # Lo que firma SignPath: un zip con Esme.exe en la raíz
+      # (ver docs/signpath/artifact-configuration.xml).
+      - name: Subir exe sin firmar
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: Esme-unsigned
+          path: target/release/Esme.exe
+          if-no-files-found: error
+
+      - name: Firmar con SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Esme' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Usar el exe firmado
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        shell: pwsh
+        run: |
+          Copy-Item signed\Esme.exe target\release\Esme.exe -Force
+          Get-AuthenticodeSignature target\release\Esme.exe | Format-List Status, SignerCertificate
+
       - name: Empaquetar
         shell: pwsh
         run: |
           New-Item dist -ItemType Directory | Out-Null
           Copy-Item target\release\Esme.exe dist\Esme.exe
-          Compress-Archive -Path target\release\Esme.exe, README.md -DestinationPath "dist\Esme-${{ github.ref_name }}-portable.zip"
+          Compress-Archive -Path target\release\Esme.exe, README.md, LICENSE -DestinationPath "dist\Esme-${{ github.ref_name }}-portable.zip"
           Get-ChildItem dist | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v4

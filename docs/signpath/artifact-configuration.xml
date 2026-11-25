@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Configuración de artefacto de SignPath para Esme.
+     GitHub Actions sube target/release/Esme.exe como artefacto, que llega a SignPath como
+     un zip con el exe en la raíz. Pegalo en la configuración del proyecto en signpath.io. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="Esme.exe" product-name="Esme" product-version="1.*">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
