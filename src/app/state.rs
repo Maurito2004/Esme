@@ -90,6 +90,10 @@ impl App {
             d.h += ui::today_extra(self.today_mask(), self.todo.items.len());
             d.w = d.w.max(400.0);
         }
+        if self.mixer_on {
+            d.h += ui::mixer_extra(self.mixer.len());
+            d.w = d.w.max(400.0);
+        }
         d.h += ui::PAGE_DOTS_H;
         if self.ask_on {
             d.h += ui::ASK_BASE_EXTRA;
@@ -136,6 +140,7 @@ impl App {
             self.shelf_on,
             self.today_mask(),
             self.ask_on,
+            if self.mixer_on { Some(self.mixer.len()) } else { None },
         )
     }
 
@@ -165,8 +170,10 @@ impl App {
             3
         } else if self.clip_on {
             4
-        } else if self.lyrics_on && self.has_media() {
+        } else if self.mixer_on {
             5
+        } else if self.lyrics_on && self.has_media() {
+            6
         } else {
             0
         }
@@ -232,6 +239,11 @@ impl App {
     }
 
     pub(crate) fn retarget(&mut self) {
+        // Un solo panel a la vez: si se abrió otro, el mezclador se cierra (y suelta Core Audio).
+        if self.mixer_on && (self.lyrics_on || self.clip_on || self.shelf_on || self.today_on || self.ask_on) {
+            self.mixer_on = false;
+            self.mixer.clear();
+        }
         let was = self.is_animating();
         let c = self.accent_target();
         for (s, v) in self.aura.iter_mut().zip([c.0, c.1, c.2]) {

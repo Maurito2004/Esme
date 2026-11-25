@@ -77,6 +77,11 @@ pub struct ShelfView<'a> {
     pub drop_hover: bool,
 }
 
+/// Mezclador: (nombre, volumen 0..1, silenciado).
+pub struct MixerView<'a> {
+    pub rows: &'a [(String, f32, bool)],
+}
+
 pub struct ClipView<'a> {
     pub items: &'a [String],
     /// Fila recién copiada (muestra "✓ Copiado").
@@ -132,6 +137,8 @@ pub struct Frame<'a> {
     pub today: Option<TodayView<'a>>,
     /// Panel "Ask Esme" (Fase 6) abierto.
     pub ask: Option<AskView<'a>>,
+    /// Mezclador por app abierto.
+    pub mixer: Option<MixerView<'a>>,
     /// Color de acento: el de los ojos de la mascota (ámbar en Esme, blanco en el gato).
     pub accent: (f32, f32, f32),
     /// Píldora flotante: separación (DIPs) con el borde de arriba; 0 = pegada (notch clásico).
@@ -201,6 +208,8 @@ const G_CLIP: &str = "\u{E77F}";
 const G_SHELF: &str = "\u{E8B7}";
 const G_TODAY: &str = "\u{E787}";
 const G_ASK: &str = "\u{E945}";
+const G_VOLUME: &str = "\u{E767}";
+const G_MUTE: &str = "\u{E74F}";
 
 impl Renderer {
     pub fn new(hwnd: HWND, width_px: u32, height_px: u32, scale: f32) -> Result<Self> {
@@ -669,6 +678,15 @@ impl Renderer {
             self.draw_ask(av, l, f.accent, ap, sh, f.hover)?;
             self.unstagger(rise);
         }
+        if l.mixer_btn.r > l.mixer_btn.l {
+            let on = f.mixer.is_some();
+            self.button(G_VOLUME, &self.fonts.icon, l.mixer_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Mixer) || on, sh)?;
+        }
+        if let Some(mv) = &f.mixer {
+            let ap = self.stagger(a, rise);
+            self.draw_mixer(mv, l, f.accent, ap, sh, f.hover)?;
+            self.unstagger(rise);
+        }
         self.draw_page_dots(l, f.active_page, f.accent, a, sh, f.hover)?;
         unsafe {
             self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy));
@@ -1089,6 +1107,41 @@ impl Renderer {
             };
             let rr = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 2.5, radiusY: 2.5 };
             unsafe { self.ctx.FillRoundedRectangle(&rr, &br) };
+        }
+        Ok(())
+    }
+
+    fn draw_mixer(&self, mv: &MixerView, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+        if mv.rows.is_empty() {
+            return self.label("No encontré la salida de audio", &self.fonts.lyric, l.mixer, (1.0, 1.0, 1.0, 0.55 * a), sh);
+        }
+        for (i, (name, level, muted)) in mv.rows.iter().enumerate().take(l.mixer_n) {
+            let row = l.mixer_row(i);
+            let hot = matches!(hover, Some(Btn::MixerBar(j) | Btn::MixerMute(j)) if j == i);
+            if hot {
+                let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.16 } else { 0.07 } * a)?;
+                let rr = D2D1_ROUNDED_RECT { rect: d2r(row), radiusX: 8.0, radiusY: 8.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+            }
+            let icon = R::new(row.l + 2.0, row.t, row.l + 30.0, row.b);
+            let glyph = if *muted { G_MUTE } else { G_VOLUME };
+            let ia = if *muted { 0.45 } else { 0.85 };
+            self.label(glyph, &self.fonts.icon, icon, (1.0, 1.0, 1.0, ia * a), sh)?;
+            let name_r = R::new(row.l + 32.0, row.t, row.l + 128.0, row.b);
+            let na = if i == 0 { 0.95 } else { 0.8 };
+            self.label(name, &self.fonts.artist, name_r, (1.0, 1.0, 1.0, na * a), sh)?;
+            let bar = l.mixer_bar(i);
+            let v = if *muted { 0.0 } else { level.clamp(0.0, 1.0) };
+            let c = if i == 0 { accent } else { BLUE };
+            self.bar(bar, v, c, a)?;
+            if hot {
+                let x = bar.l + (bar.r - bar.l) * v;
+                let knob = self.brush(1.0, 1.0, 1.0, 0.95 * a)?;
+                let e = D2D1_ELLIPSE { point: pt(x, bar.cy()), radiusX: 5.5, radiusY: 5.5 };
+                unsafe { self.ctx.FillEllipse(&e, &knob) };
+            }
+            let pct = format!("{}%", (v * 100.0).round() as i32);
+            self.label(&pct, &self.fonts.small, R::new(bar.r + 6.0, row.t, row.r, row.b), (1.0, 1.0, 1.0, 0.7 * a), sh)?;
         }
         Ok(())
     }

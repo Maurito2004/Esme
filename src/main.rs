@@ -25,6 +25,7 @@ mod fullscreen;
 mod http;
 mod lyrics;
 mod mascot;
+mod mixer;
 mod media;
 mod render;
 mod settings;
@@ -38,7 +39,7 @@ use config::Config;
 use lyrics::Lyrics;
 use mascot::{Mascot, Mood};
 use media::{Cmd, MediaInfo};
-use render::{AskView, ClipView, ShelfView, TodayView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
+use render::{AskView, ClipView, MixerView, ShelfView, TodayView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
 use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -210,6 +211,8 @@ struct App {
     pomo: productivity::Pomodoro,
     water: productivity::Water,
     todo: todo::TodoList,
+    mixer_on: bool,
+    mixer: mixer::Mixer,
     todo_input: String,
     todo_focus: bool,
     todo_caret: bool,
@@ -364,6 +367,8 @@ fn main() -> Result<()> {
             pomo,
             water: productivity::Water::load(),
             todo: todo::TodoList::load(),
+            mixer_on: false,
+            mixer: mixer::Mixer::default(),
             todo_input: String::new(),
             todo_focus: false,
             todo_caret: false,

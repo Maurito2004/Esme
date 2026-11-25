@@ -36,6 +36,14 @@ pub fn shelf_extra(n: usize) -> f32 {
     if n == 0 { 64.0 } else { n.div_ceil(SHELF_COLS) as f32 * SHELF_TILE_H + 38.0 }
 }
 
+/// Mezclador: alto de cada fila (Sistema + una por app).
+pub const MIXER_ROW_H: f32 = 30.0;
+
+/// Alto extra del mezclador según cuántas filas hay.
+pub fn mixer_extra(n: usize) -> f32 {
+    n.clamp(1, crate::mixer::MAX_ROWS) as f32 * MIXER_ROW_H + 14.0
+}
+
 /// Filas del panel "Hoy" (máscara de bits; TODAY_OPEN = panel abierto).
 pub const TODAY_POMO: u8 = 1;
 pub const TODAY_WATER: u8 = 2;
@@ -109,6 +117,9 @@ pub enum Btn {
     AskSpellcheck,
     AskCopy,
     PageDot(usize),
+    Mixer,
+    MixerBar(usize),
+    MixerMute(usize),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -188,6 +199,9 @@ pub struct Layout {
     pub ask_copy: R,
     pub dots_area: R,
     pub dots_count: usize,
+    pub mixer_btn: R,
+    pub mixer: R,
+    pub mixer_n: usize,
 }
 
 impl Layout {
@@ -201,6 +215,7 @@ impl Layout {
         shelf: bool,
         today: u8,
         ask: bool,
+        mixer: Option<usize>,
     ) -> Self {
         // El área de letras ocupa lo que sobre debajo de los controles.
         let x0 = cx - d.w / 2.0;
@@ -212,12 +227,13 @@ impl Layout {
             let tx = x0 + 94.0;
             l.title = R::new(tx, y0 + 15.0, x1 - 18.0, y0 + 36.0);
             l.artist = R::new(tx, y0 + 36.0, x1 - 18.0, y0 + 54.0);
-            let c = tx + 52.0;
+            let c = tx + 44.0;
             let by = y0 + 70.0;
             let btn = |x: f32| R::new(x - 16.0, by - 14.0, x + 16.0, by + 14.0);
-            l.prev = btn(c - 40.0);
+            l.prev = btn(c - 36.0);
             l.play = btn(c);
-            l.next = btn(c + 40.0);
+            l.next = btn(c + 36.0);
+            l.mixer_btn = btn(x1 - 200.0);
             l.lyrics_btn = btn(x1 - 30.0);
             l.clip_btn = btn(x1 - 64.0);
             l.shelf_btn = btn(x1 - 98.0);
@@ -236,6 +252,10 @@ impl Layout {
             }
             if ask {
                 l.set_ask(sub);
+            }
+            if let Some(n) = mixer {
+                l.mixer = sub;
+                l.mixer_n = n;
             }
             let ty = y0 + 100.0;
             l.t_left = R::new(x0 + 12.0, ty - 9.0, x0 + 56.0, ty + 9.0);
@@ -265,10 +285,26 @@ impl Layout {
             if ask {
                 l.set_ask(sub);
             }
+            if let Some(n) = mixer {
+                l.mixer = sub;
+                l.mixer_n = n;
+            }
         }
-        l.dots_count = if media { 6 } else { 5 };
+        l.dots_count = if media { 7 } else { 6 };
         l.dots_area = R::new(x0, y0 + d.h - PAGE_DOTS_H - 2.0, x1, y0 + d.h - 2.0);
         l
+    }
+
+    /// Fila `i` del mezclador.
+    pub fn mixer_row(&self, i: usize) -> R {
+        let t = self.mixer.t + 6.0 + i as f32 * MIXER_ROW_H;
+        R::new(self.mixer.l, t, self.mixer.r, t + MIXER_ROW_H - 2.0)
+    }
+
+    /// Barrita de volumen de la fila `i` (zona clickeable).
+    pub fn mixer_bar(&self, i: usize) -> R {
+        let r = self.mixer_row(i);
+        R::new(r.l + 134.0, r.cy() - 2.5, r.r - 48.0, r.cy() + 2.5)
     }
 
     /// Filas y botones del panel "Hoy".
@@ -359,6 +395,21 @@ impl Layout {
         active_page: usize,
     ) -> Option<Btn> {
         let pad = 4.0;
+        if self.mixer_btn.r > self.mixer_btn.l && self.mixer_btn.inflate(pad).contains(x, y) {
+            return Some(Btn::Mixer);
+        }
+        if self.mixer_n > 0 && self.mixer.contains(x, y) {
+            for i in 0..self.mixer_n {
+                let row = self.mixer_row(i);
+                if row.contains(x, y) {
+                    let bar = self.mixer_bar(i);
+                    if x >= bar.l - 8.0 {
+                        return Some(Btn::MixerBar(i));
+                    }
+                    return Some(Btn::MixerMute(i));
+                }
+            }
+        }
         if self.shelf_btn.inflate(pad).contains(x, y) {
             return Some(Btn::Shelf);
         }

@@ -237,6 +237,19 @@ impl App {
                 self.retarget();
             }
             Btn::Ask => self.toggle_ask(false),
+            Btn::Mixer => self.toggle_mixer(!self.mixer_on),
+            Btn::MixerBar(i) => {
+                let bar = layout.mixer_bar(i);
+                let v = ((x - bar.l) / (bar.r - bar.l).max(1.0)).clamp(0.0, 1.0);
+                // Imán en los extremos: fácil llegar a 0 % y 100 %.
+                let v = if v < 0.03 { 0.0 } else if v > 0.97 { 1.0 } else { v };
+                self.mixer.set_level(i, v);
+                self.refresh();
+            }
+            Btn::MixerMute(i) => {
+                self.mixer.toggle_mute(i);
+                self.refresh();
+            }
             Btn::AskMode => {
                 let ask = self.ask_mut();
                 ask.mode = ask.mode.toggle();
@@ -336,6 +349,26 @@ impl App {
     }
 
     /// Cambia directamente a la vista elegida desde los puntitos indicadores del panel expandido.
+    /// Abre (relee las apps con sonido) o cierra el mezclador.
+    pub(crate) fn toggle_mixer(&mut self, on: bool) {
+        if on {
+            self.mixer = mixer::Mixer::read();
+            self.mixer_on = true;
+            self.lyrics_on = false;
+            self.clip_on = false;
+            self.shelf_on = false;
+            self.today_on = false;
+            self.ask_on = false;
+            self.focus_ask_input(false);
+            self.focus_todo_input(false);
+        } else {
+            self.mixer_on = false;
+            self.mixer.clear();
+        }
+        self.retarget();
+        self.refresh();
+    }
+
     fn select_page(&mut self, page: usize) {
         match page {
             0 => {
@@ -380,7 +413,8 @@ impl App {
                 self.focus_todo_input(false);
                 self.retarget();
             }
-            5 if self.has_media() => {
+            5 => self.toggle_mixer(true),
+            6 if self.has_media() => {
                 self.lyrics_on = true;
                 self.clip_on = false;
                 self.shelf_on = false;
@@ -400,6 +434,16 @@ impl App {
     /// Rueda del mouse: desplaza la lista To-Do en "Hoy" o la letra sin sincronizar.
     pub(crate) fn on_wheel(&mut self, wp: WPARAM) {
         let delta = ((wp.0 >> 16) & 0xFFFF) as i16;
+        if self.mixer_on {
+            if let Some(Btn::MixerBar(i) | Btn::MixerMute(i)) = self.hover_btn {
+                if let Some(cur) = self.mixer.channels.get(i).map(|c| c.level) {
+                    let step = if delta > 0 { 0.05 } else { -0.05 };
+                    self.mixer.set_level(i, ((cur + step) * 20.0).round() / 20.0);
+                    self.refresh();
+                }
+                return;
+            }
+        }
         if self.today_on && self.cfg.hoy_todo && self.todo.items.len() > ui::TODO_VISIBLE {
             let max = self.todo.items.len().saturating_sub(ui::TODO_VISIBLE);
             if delta < 0 {
