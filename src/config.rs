@@ -73,6 +73,8 @@ pub struct Config {
     pub hoy_clima: bool,
     #[nserde(default = "true")]
     pub hoy_calendario: bool,
+    #[nserde(default = "true")]
+    pub hoy_todo: bool,
     /// Minutos de foco y de descanso del Pomodoro.
     #[nserde(default = "25")]
     pub pomo_foco: u32,
@@ -91,6 +93,8 @@ pub struct Config {
     pub aviso_brillo: bool,
     #[nserde(default = "true")]
     pub aviso_bateria: bool,
+    #[nserde(default = "true")]
+    pub aviso_wifi: bool,
 }
 
 impl Default for Config {
@@ -116,6 +120,7 @@ impl Default for Config {
             hoy_agua: true,
             hoy_clima: true,
             hoy_calendario: true,
+            hoy_todo: true,
             pomo_foco: 25,
             pomo_descanso: 5,
             aviso_volumen: true,
@@ -124,6 +129,7 @@ impl Default for Config {
             aviso_energia: true,
             aviso_brillo: true,
             aviso_bateria: true,
+            aviso_wifi: true,
         }
     }
 }

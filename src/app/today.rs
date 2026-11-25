@@ -196,4 +196,146 @@ impl App {
         }
         self.show_toast("Calendario conectado ✓".into(), 2500);
     }
+
+    // ---------- To-Do rápido en "Hoy" (v1.0 — Bloque 1) ----------
+
+    /// Activa o desactiva el foco de teclado sobre el campo rápido del To-Do (sin hooks globales).
+    pub(crate) fn focus_todo_input(&mut self, focus: bool) {
+        if !focus && !self.todo_focus {
+            return;
+        }
+        self.todo_focus = focus;
+        self.todo_caret = focus;
+        unsafe {
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            if focus {
+                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex & !(WS_EX_NOACTIVATE.0 as isize));
+                let _ = SetForegroundWindow(self.hwnd);
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(self.hwnd));
+                SetTimer(Some(self.hwnd), T_CARET, 530, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), T_CARET);
+                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex | (WS_EX_NOACTIVATE.0 as isize));
+            }
+        }
+    }
+
+    pub(crate) fn add_todo_from_input(&mut self) {
+        if self.todo.add_quick(&self.todo_input) {
+            self.todo_input.clear();
+            self.todo_scroll = 0;
+            self.retarget();
+            self.refresh();
+        }
+    }
+
+    pub(crate) fn toggle_todo(&mut self, visible_row: usize) {
+        let idx = self.todo_scroll + visible_row;
+        if self.todo.toggle(idx) {
+            self.refresh();
+        }
+    }
+
+    pub(crate) fn delete_todo(&mut self, visible_row: usize) {
+        let idx = self.todo_scroll + visible_row;
+        if self.todo.remove(idx) {
+            let max_scroll = self.todo.items.len().saturating_sub(ui::TODO_VISIBLE);
+            self.todo_scroll = self.todo_scroll.min(max_scroll);
+            self.retarget();
+            self.refresh();
+        }
+    }
+
+    /// Revisado en `T_CLOCK` (una vez por minuto, 0 timers extra): avisa en la píldora si venció una tarea.
+    pub(crate) fn check_todo_due(&mut self) {
+        if !self.cfg.hoy_todo {
+            return;
+        }
+        let day = productivity::today();
+        let due = self.todo.take_due_alerts(&day, &self.time_text);
+        if due.is_empty() {
+            return;
+        }
+        unsafe {
+            let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(MB_ICONASTERISK);
+        }
+        let msg = if due.len() == 1 {
+            format!("⏰ {} · {}", due[0].0, due[0].1)
+        } else {
+            let list: Vec<&str> = due.iter().map(|(_, t)| t.as_str()).collect();
+            format!("⏰ {} · {}", due[0].0, list.join(" / "))
+        };
+        self.show_toast(msg, 4500);
+    }
+
+    /// Teclas especiales mientras el input del To-Do tiene foco. Devuelve `true` si la consumió.
+    pub(crate) fn on_todo_key_down(&mut self, vk: u32) -> bool {
+        if !self.today_on || !self.todo_focus {
+            return false;
+        }
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_RETURN};
+        let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 };
+        if ctrl && vk as u8 == b'V' {
+            if let Some(clip_txt) = clipboard::read_text(self.hwnd) {
+                let clean: String = clip_txt
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(80usize.saturating_sub(self.todo_input.chars().count()))
+                    .collect();
+                if !clean.is_empty() {
+                    self.todo_input.push_str(&clean);
+                    self.todo_caret = true;
+                    unsafe { SetTimer(Some(self.hwnd), T_CARET, 530, None) };
+                    self.refresh();
+                }
+            }
+            return true;
+        }
+        match vk as u16 {
+            x if x == VK_RETURN.0 => {
+                self.add_todo_from_input();
+                true
+            }
+            x if x == VK_ESCAPE.0 => {
+                self.focus_todo_input(false);
+                self.retarget();
+                self.refresh();
+                true
+            }
+            x if x == VK_BACK.0 => {
+                if ctrl {
+                    self.todo_input.clear();
+                } else {
+                    self.todo_input.pop();
+                }
+                self.todo_caret = true;
+                unsafe { SetTimer(Some(self.hwnd), T_CARET, 530, None) };
+                self.refresh();
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Entrada de caracteres Unicode mientras el input del To-Do tiene foco.
+    pub(crate) fn on_todo_char(&mut self, ch: u32) -> bool {
+        if !self.today_on || !self.todo_focus {
+            return false;
+        }
+        let Some(c) = char::from_u32(ch) else { return true };
+        if c.is_control() {
+            return true;
+        }
+        if self.todo_input.chars().count() < 80 {
+            self.todo_input.push(c);
+            self.todo_caret = true;
+            unsafe { SetTimer(Some(self.hwnd), T_CARET, 530, None) };
+            self.refresh();
+        }
+        true
+    }
 }

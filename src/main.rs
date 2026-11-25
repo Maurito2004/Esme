@@ -28,8 +28,10 @@ mod mascot;
 mod media;
 mod render;
 mod settings;
+mod todo;
 mod tray;
 mod ui;
+mod wifi;
 
 use anim::{clamp01, Spring};
 use config::Config;
@@ -203,6 +205,11 @@ struct App {
     today_loaded: bool,
     pomo: productivity::Pomodoro,
     water: productivity::Water,
+    todo: todo::TodoList,
+    todo_input: String,
+    todo_focus: bool,
+    todo_caret: bool,
+    todo_scroll: usize,
     weather: Option<weather::Weather>,
     weather_msg: String,
     events: Vec<ical::Event>,
@@ -224,6 +231,7 @@ struct App {
     /// Al terminar el saludo de bienvenida, la mascota saluda con un saltito.
     greet_after_toast: bool,
     audio: Option<system::Audio>,
+    _wifi: Option<wifi::Wifi>,
     shell_msg: u32,
     last_ac: Option<u32>,
     /// Último brillo informado (el primer aviso es el estado inicial y no se muestra).
@@ -349,6 +357,11 @@ fn main() -> Result<()> {
             today_loaded: false,
             pomo,
             water: productivity::Water::load(),
+            todo: todo::TodoList::load(),
+            todo_input: String::new(),
+            todo_focus: false,
+            todo_caret: false,
+            todo_scroll: 0,
             weather: None,
             weather_msg: "Abrí «Hoy» para cargar el clima".into(),
             events: Vec::new(),
@@ -368,6 +381,7 @@ fn main() -> Result<()> {
             ],
             greet_after_toast: false,
             audio: None,
+            _wifi: None,
             shell_msg: 0,
             last_ac: None,
             last_brightness: None,
@@ -413,8 +427,9 @@ fn main() -> Result<()> {
         let _ = RegisterHotKey(Some(hwnd), HOTKEY_OCR, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32);
         let _ = RegisterHotKey(Some(hwnd), HOTKEY_ASK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_SPACE.0 as u32);
 
-        // Overlays del sistema: audio, idioma del teclado y cargador (todo por eventos).
+        // Overlays del sistema: audio, Wi-Fi, idioma del teclado y cargador (todo por eventos).
         let audio = system::Audio::new(hwnd);
+        let wifi = wifi::Wifi::new(hwnd);
         let _ = RegisterShellHookWindow(hwnd);
         let shell_msg = RegisterWindowMessageW(w!("SHELLHOOK"));
         let _ = windows::Win32::System::Power::RegisterPowerSettingNotification(
@@ -433,6 +448,7 @@ fn main() -> Result<()> {
         // por primera vez, evitando inicializar WinRT Geolocation y WinHTTP/TLS al arrancar Esme.exe.
         with_app(|a| {
             a.audio = audio;
+            a._wifi = wifi;
             a.shell_msg = shell_msg;
         });
 

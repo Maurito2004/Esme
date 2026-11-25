@@ -44,7 +44,16 @@ impl App {
                 Some(Lyrics::Synced(v)) => v.len(),
                 _ => 0,
             };
-            self.layout_now().hit(x, y, self.lyric_scroll.value, n, self.clip_on_count(), self.shelf_on_count())
+            self.layout_now().hit(
+                x,
+                y,
+                self.lyric_scroll.value,
+                n,
+                self.clip_on_count(),
+                self.shelf_on_count(),
+                self.todo_visible_count(),
+                self.active_page(),
+            )
         } else {
             None
         };

@@ -57,6 +57,7 @@ pub enum Key {
     HoyAgua,
     HoyClima,
     HoyCal,
+    HoyTodo,
     AguaMeta,
     PomoFoco,
     PomoDescanso,
@@ -67,6 +68,7 @@ pub enum Key {
     AvisoEnergia,
     AvisoBrillo,
     AvisoBateria,
+    AvisoWifi,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

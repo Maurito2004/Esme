@@ -21,7 +21,7 @@ impl App {
     }
 
     pub(crate) fn want_expanded(&self) -> bool {
-        self.hover || self.pinned || self.drop_open || self.ask_on
+        self.hover || self.pinned || self.drop_open || self.ask_on || self.todo_focus
     }
 
     pub(crate) fn lyric_pill(&self) -> bool {
@@ -64,9 +64,10 @@ impl App {
             d.w = d.w.max(400.0);
         }
         if self.today_on {
-            d.h += ui::today_extra(self.today_mask());
+            d.h += ui::today_extra(self.today_mask(), self.todo.items.len());
             d.w = d.w.max(400.0);
         }
+        d.h += ui::PAGE_DOTS_H;
         if self.ask_on {
             d.h += ui::ASK_BASE_EXTRA;
             d.w = d.w.max(430.0);
@@ -126,7 +127,35 @@ impl App {
         if c.hoy_agua { m |= ui::TODAY_WATER; }
         if c.hoy_clima { m |= ui::TODAY_WEATHER; }
         if c.hoy_calendario { m |= ui::TODAY_CAL; }
+        if c.hoy_todo { m |= ui::TODAY_TODO; }
         m
+    }
+
+    /// Índice de la vista activa para los puntitos indicadores del panel expandido.
+    /// Orden: 0 = Principal, 1 = Ask, 2 = Hoy, 3 = Estante, 4 = Portapapeles, 5 = Letras (con música).
+    pub(crate) fn active_page(&self) -> usize {
+        if self.ask_on {
+            1
+        } else if self.today_on {
+            2
+        } else if self.shelf_on {
+            3
+        } else if self.clip_on {
+            4
+        } else if self.lyrics_on && self.has_media() {
+            5
+        } else {
+            0
+        }
+    }
+
+    /// Cantidad de tareas visibles en la ventana actual del To-Do.
+    pub(crate) fn todo_visible_count(&self) -> usize {
+        if self.today_on && self.cfg.hoy_todo {
+            self.todo.items.len().saturating_sub(self.todo_scroll).min(ui::TODO_VISIBLE)
+        } else {
+            0
+        }
     }
 
     pub(crate) fn is_animating(&self) -> bool {

@@ -50,6 +50,7 @@ impl App {
             self.clip_on = false;
             self.shelf_on = false;
             self.today_on = false;
+            self.focus_todo_input(false);
             self.focus_ask_input(true);
         } else {
             self.focus_ask_input(false);
@@ -99,6 +100,9 @@ impl App {
 
     /// Teclas especiales en el cuadro de texto Direct2D (`Tab`, `Enter`, `Esc`, `Backspace`, `Ctrl+V/C/A`).
     pub(crate) fn on_key_down(&mut self, vk: u32) {
+        if self.on_todo_key_down(vk) {
+            return;
+        }
         if !self.ask_on || !self.ask.as_ref().map(|a| a.focus).unwrap_or(false) {
             return;
         }
@@ -190,6 +194,9 @@ impl App {
 
     /// Entrada de caracteres Unicode (`WM_CHAR`) en el cuadro de texto Direct2D.
     pub(crate) fn on_char(&mut self, ch: u32) {
+        if self.on_todo_char(ch) {
+            return;
+        }
         if !self.ask_on || !self.ask.as_ref().map(|a| a.focus).unwrap_or(false) {
             return;
         }

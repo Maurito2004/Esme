@@ -25,7 +25,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 // Clic derecho sobre un archivo del estante: lo quita.
                 with_app(|a| {
                     let (x, y) = a.to_dips(lp);
-                    if let Some(Btn::ShelfItem(i)) = a.layout_now().hit(x, y, 0.0, 0, 0, a.shelf_on_count()) {
+                    if let Some(Btn::ShelfItem(i)) = a.layout_now().hit(x, y, 0.0, 0, 0, a.shelf_on_count(), 0, a.active_page()) {
                         a.shelf.remove(i);
                         a.retarget();
                         a.refresh();
@@ -63,6 +63,10 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                         a.focus_ask_input(false);
                         a.refresh();
                     }
+                    if a.todo_focus {
+                        a.focus_todo_input(false);
+                        a.refresh();
+                    }
                 });
                 LRESULT(0)
             }
@@ -90,7 +94,13 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 with_app(|a| {
                     // Si hubo arrastre, `press` ya se limpió y no es un clic.
                     let pressed = a.press.take();
-                    if pressed.is_some() || a.layout_now().hit(a.to_dips(lp).0, a.to_dips(lp).1, 0.0, 0, 0, a.shelf_on_count()).map(|b| !matches!(b, Btn::ShelfItem(_))).unwrap_or(true) {
+                    let (x, y) = a.to_dips(lp);
+                    if pressed.is_some()
+                        || a.layout_now()
+                            .hit(x, y, 0.0, 0, 0, a.shelf_on_count(), 0, a.active_page())
+                            .map(|b| !matches!(b, Btn::ShelfItem(_)))
+                            .unwrap_or(true)
+                    {
                         a.on_click(lp);
                     }
                 });
@@ -101,7 +111,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 LRESULT(0)
             }
             WM_MOUSEACTIVATE => {
-                let allow_focus = with_app(|a| a.ask_on).unwrap_or(false);
+                let allow_focus = with_app(|a| a.ask_on || (a.today_on && a.cfg.hoy_todo)).unwrap_or(false);
                 LRESULT(if allow_focus { MA_ACTIVATE as isize } else { MA_NOACTIVATE as isize })
             }
             // Menú de la bandeja dibujado por nosotros (tema oscuro/claro).
@@ -145,6 +155,10 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             }
             system::WM_SYS => {
                 with_app(|a| a.on_sys(wp.0, lp.0));
+                LRESULT(0)
+            }
+            wifi::WM_WIFI => {
+                with_app(|a| a.on_wifi());
                 LRESULT(0)
             }
             WM_POWERBROADCAST if wp.0 == PBT_POWERSETTINGCHANGE => {

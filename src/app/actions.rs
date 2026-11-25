@@ -51,6 +51,31 @@ impl App {
         }
     }
 
+    pub(crate) fn on_wifi(&mut self) {
+        let Some(ev) = wifi::take_event() else { return };
+        if !self.cfg.aviso_wifi {
+            return;
+        }
+        match ev {
+            wifi::WifiEvent::Connected(ssid) => {
+                let text = if ssid.is_empty() {
+                    "Wi-Fi conectado".to_string()
+                } else {
+                    format!("Wi-Fi · {ssid}")
+                };
+                self.show_overlay("\u{E701}", text, None);
+            }
+            wifi::WifiEvent::Disconnected(ssid) => {
+                let text = if ssid.is_empty() {
+                    "Wi-Fi desconectado".to_string()
+                } else {
+                    format!("Sin Wi-Fi · {ssid}")
+                };
+                self.show_overlay("\u{EB5E}", text, None);
+            }
+        }
+    }
+
     pub(crate) fn on_power(&mut self, lp: LPARAM) {
         use windows::Win32::System::Power::{GetSystemPowerStatus, POWERBROADCAST_SETTING, SYSTEM_POWER_STATUS};
         unsafe {
@@ -155,7 +180,25 @@ impl App {
             _ => 0,
         };
         let layout = self.layout_now();
-        let Some(btn) = layout.hit(x, y, self.lyric_scroll.value, n, self.clip_on_count(), self.shelf_on_count()) else { return };
+        let Some(btn) = layout.hit(
+            x,
+            y,
+            self.lyric_scroll.value,
+            n,
+            self.clip_on_count(),
+            self.shelf_on_count(),
+            self.todo_visible_count(),
+            self.active_page(),
+        ) else {
+            if self.todo_focus {
+                self.focus_todo_input(false);
+                self.refresh();
+            }
+            return;
+        };
+        if !matches!(btn, Btn::TodoInput | Btn::TodoAdd) && self.todo_focus {
+            self.focus_todo_input(false);
+        }
         match btn {
             Btn::Play => {
                 let _ = self.media_tx.send(Cmd::PlayPause);
@@ -174,6 +217,7 @@ impl App {
                     self.today_on = false;
                     self.ask_on = false;
                     self.focus_ask_input(false);
+                    self.focus_todo_input(false);
                 }
                 self.retarget();
             }
@@ -187,6 +231,8 @@ impl App {
                     self.focus_ask_input(false);
                     self.water = std::mem::take(&mut self.water).for_today();
                     self.ensure_today_loaded();
+                } else {
+                    self.focus_todo_input(false);
                 }
                 self.retarget();
             }
@@ -213,6 +259,13 @@ impl App {
             Btn::PomoReset => self.pomo_reset(),
             Btn::WaterAdd => self.water_add(1),
             Btn::WaterSub => self.water_add(-1),
+            Btn::TodoInput => {
+                self.focus_todo_input(true);
+                self.refresh();
+            }
+            Btn::TodoAdd => self.add_todo_from_input(),
+            Btn::TodoToggle(i) => self.toggle_todo(i),
+            Btn::TodoDelete(i) => self.delete_todo(i),
             Btn::Shelf => {
                 self.shelf_on = !self.shelf_on;
                 if self.shelf_on {
@@ -221,8 +274,14 @@ impl App {
                     self.today_on = false;
                     self.ask_on = false;
                     self.focus_ask_input(false);
+                    self.focus_todo_input(false);
                 }
                 self.retarget();
+            }
+            Btn::ShelfClear => {
+                self.shelf.clear();
+                self.retarget();
+                self.refresh();
             }
             Btn::ShelfItem(i) => {
                 // Clic: abrir con la app predeterminada.
@@ -249,6 +308,7 @@ impl App {
                     self.today_on = false;
                     self.ask_on = false;
                     self.focus_ask_input(false);
+                    self.focus_todo_input(false);
                 }
                 if self.lyrics_on && self.lyrics.is_none() {
                     self.fetch_lyrics();
@@ -271,15 +331,89 @@ impl App {
                     }
                 }
             }
+            Btn::PageDot(i) => self.select_page(i),
         }
     }
 
-    /// Rueda del mouse: desplaza la letra sin sincronizar.
+    /// Cambia directamente a la vista elegida desde los puntitos indicadores del panel expandido.
+    fn select_page(&mut self, page: usize) {
+        match page {
+            0 => {
+                self.lyrics_on = false;
+                self.clip_on = false;
+                self.shelf_on = false;
+                self.today_on = false;
+                self.ask_on = false;
+                self.focus_ask_input(false);
+                self.focus_todo_input(false);
+                self.retarget();
+            }
+            1 => self.toggle_ask(true),
+            2 => {
+                self.today_on = true;
+                self.lyrics_on = false;
+                self.clip_on = false;
+                self.shelf_on = false;
+                self.ask_on = false;
+                self.focus_ask_input(false);
+                self.water = std::mem::take(&mut self.water).for_today();
+                self.ensure_today_loaded();
+                self.retarget();
+            }
+            3 => {
+                self.shelf_on = true;
+                self.lyrics_on = false;
+                self.clip_on = false;
+                self.today_on = false;
+                self.ask_on = false;
+                self.focus_ask_input(false);
+                self.focus_todo_input(false);
+                self.retarget();
+            }
+            4 => {
+                self.clip_on = true;
+                self.lyrics_on = false;
+                self.shelf_on = false;
+                self.today_on = false;
+                self.ask_on = false;
+                self.focus_ask_input(false);
+                self.focus_todo_input(false);
+                self.retarget();
+            }
+            5 if self.has_media() => {
+                self.lyrics_on = true;
+                self.clip_on = false;
+                self.shelf_on = false;
+                self.today_on = false;
+                self.ask_on = false;
+                self.focus_ask_input(false);
+                self.focus_todo_input(false);
+                if self.lyrics.is_none() {
+                    self.fetch_lyrics();
+                }
+                self.retarget();
+            }
+            _ => {}
+        }
+    }
+
+    /// Rueda del mouse: desplaza la lista To-Do en "Hoy" o la letra sin sincronizar.
     pub(crate) fn on_wheel(&mut self, wp: WPARAM) {
+        let delta = ((wp.0 >> 16) & 0xFFFF) as i16;
+        if self.today_on && self.cfg.hoy_todo && self.todo.items.len() > ui::TODO_VISIBLE {
+            let max = self.todo.items.len().saturating_sub(ui::TODO_VISIBLE);
+            if delta < 0 {
+                self.todo_scroll = (self.todo_scroll + 1).min(max);
+            } else if delta > 0 {
+                self.todo_scroll = self.todo_scroll.saturating_sub(1);
+            }
+            self.refresh();
+            return;
+        }
         if let Some(Lyrics::Plain(lines)) = &self.lyrics {
-            let delta = ((wp.0 >> 16) & 0xFFFF) as i16 as f32 / 120.0;
+            let steps = delta as f32 / 120.0;
             let max = lines.len().saturating_sub(1) as f32;
-            let t = (self.lyric_scroll.target - delta * 2.0).clamp(0.0, max);
+            let t = (self.lyric_scroll.target - steps * 2.0).clamp(0.0, max);
             let was = self.is_animating();
             self.lyric_scroll.set_target(t);
             if !was {

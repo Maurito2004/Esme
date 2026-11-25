@@ -203,6 +203,13 @@ impl App {
             _ => Expanded::Clock { time: &self.time_text, date: &self.date_text },
         };
 
+        let todo_end = (self.todo_scroll + ui::TODO_VISIBLE).min(self.todo.items.len());
+        let todo_slice = if self.todo_scroll < todo_end {
+            &self.todo.items[self.todo_scroll..todo_end]
+        } else {
+            &[]
+        };
+
         let frame = Frame {
             cx: self.surface_cx(),
             shape_w: w,
@@ -217,6 +224,7 @@ impl App {
             hover: self.hover_btn,
             mascot_vis: self.mascot_vis.value,
             accent: (self.aura[0].value, self.aura[1].value, self.aura[2].value),
+            active_page: self.active_page(),
             clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
             shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
             today: if self.today_on {
@@ -231,6 +239,12 @@ impl App {
                     weather: &wtext,
                     events: &events,
                     cal_hint: &self.cal_msg,
+                    todos: todo_slice,
+                    todo_total: self.todo.items.len(),
+                    todo_scroll: self.todo_scroll,
+                    todo_input: &self.todo_input,
+                    todo_focused: self.todo_focus,
+                    todo_caret: self.todo_caret,
                 })
             } else {
                 None

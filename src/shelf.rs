@@ -67,6 +67,14 @@ impl Shelf {
             self.save();
         }
     }
+
+    /// Vacía todas las rutas guardadas en el estante.
+    pub fn clear(&mut self) {
+        if !self.items.is_empty() {
+            self.items.clear();
+            self.save();
+        }
+    }
 }
 
 /// Nombre visible (sin la carpeta).

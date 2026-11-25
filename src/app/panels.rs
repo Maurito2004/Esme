@@ -18,6 +18,7 @@ impl App {
             self.today_on = false;
             self.ask_on = false;
             self.focus_ask_input(false);
+            self.focus_todo_input(false);
         }
         self.retarget();
         self.refresh();
@@ -45,7 +46,7 @@ impl App {
             return;
         }
         let (x, y) = self.to_dips(lp);
-        if let Some(Btn::ShelfItem(i)) = self.layout_now().hit(x, y, 0.0, 0, 0, self.shelf_on_count()) {
+        if let Some(Btn::ShelfItem(i)) = self.layout_now().hit(x, y, 0.0, 0, 0, self.shelf_on_count(), 0, self.active_page()) {
             self.press = Some((i, x, y));
         }
     }

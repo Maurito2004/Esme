@@ -61,6 +61,13 @@ pub struct TodayView<'a> {
     /// (cuándo, título) de los próximos eventos; vacío = mostrar `cal_hint`.
     pub events: &'a [(String, String)],
     pub cal_hint: &'a str,
+    /// Tareas visibles en la ventana actual del To-Do.
+    pub todos: &'a [crate::todo::TodoItem],
+    pub todo_total: usize,
+    pub todo_scroll: usize,
+    pub todo_input: &'a str,
+    pub todo_focused: bool,
+    pub todo_caret: bool,
 }
 
 pub struct ShelfView<'a> {
@@ -125,6 +132,8 @@ pub struct Frame<'a> {
     pub ask: Option<AskView<'a>>,
     /// Color de acento: el de los ojos de la mascota (ámbar en Esme, blanco en el gato).
     pub accent: (f32, f32, f32),
+    /// Vista activa del panel expandido (para los puntitos indicadores de página).
+    pub active_page: usize,
 }
 
 struct Fonts {
@@ -625,7 +634,7 @@ impl Renderer {
         self.button(G_TODAY, &self.fonts.icon, l.today_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Today) || on, sh)?;
         if let Some(tv) = &f.today {
             let ap = self.stagger(a, rise);
-            self.draw_today(tv, l, ap, sh, f.hover)?;
+            self.draw_today(tv, l, f.accent, ap, sh, f.hover)?;
             self.unstagger(rise);
         }
         let on = f.ask.is_some();
@@ -635,6 +644,7 @@ impl Renderer {
             self.draw_ask(av, l, f.accent, ap, sh, f.hover)?;
             self.unstagger(rise);
         }
+        self.draw_page_dots(l, f.active_page, f.accent, a, sh, f.hover)?;
         unsafe {
             self.ctx.SetTransform(&Matrix3x2::identity());
         }
@@ -805,13 +815,13 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_today(&self, tv: &TodayView, l: &Layout, a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+    fn draw_today(&self, tv: &TodayView, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
         let dim = (1.0, 1.0, 1.0, 0.6 * a);
         let white = (1.0, 1.0, 1.0, a);
         let hv = |b: Btn| hover == Some(b);
         let left = |row: R, w: f32| R::new(row.l + 4.0, row.t, row.l + 4.0 + w, row.b);
         let shown = |row: R| row.l > -1000.0;
-        if ![l.pomo_row, l.water_row, l.weather_row, l.cal_row].iter().any(|r| shown(*r)) {
+        if ![l.pomo_row, l.water_row, l.weather_row, l.cal_row, l.todo_row].iter().any(|r| shown(*r)) {
             let t = l.today;
             return self.label("Elegí qué mostrar en Ajustes → Hoy", &self.fonts.artist, R::new(t.l + 4.0, t.t + 4.0, t.r - 4.0, t.t + 32.0), dim, sh);
         }
@@ -849,23 +859,143 @@ impl Renderer {
 
         // Calendario.
         let k = l.cal_row;
-        if !shown(k) {
-            return Ok(());
+        if shown(k) {
+            self.label("\u{E787}", &self.fonts.icon, R::new(k.l + 4.0, k.t + 2.0, k.l + 28.0, k.t + 24.0), dim, sh)?;
+            if tv.events.is_empty() {
+                self.label(tv.cal_hint, &self.fonts.artist, R::new(k.l + 34.0, k.t + 2.0, k.r - 4.0, k.t + 24.0), dim, sh)?;
+            }
+            for (i, (when, title)) in tv.events.iter().take(2).enumerate() {
+                let y = k.t + 2.0 + i as f32 * 22.0;
+                self.label(when, &self.fonts.artist, R::new(k.l + 34.0, y, k.l + 140.0, y + 22.0), dim, sh)?;
+                self.label(title, &self.fonts.artist, R::new(k.l + 144.0, y, k.r - 4.0, y + 22.0), white, sh)?;
+            }
         }
-        self.label("\u{E787}", &self.fonts.icon, R::new(k.l + 4.0, k.t + 2.0, k.l + 28.0, k.t + 24.0), dim, sh)?;
-        if tv.events.is_empty() {
-            self.label(tv.cal_hint, &self.fonts.artist, R::new(k.l + 34.0, k.t + 2.0, k.r - 4.0, k.t + 24.0), dim, sh)?;
-        }
-        for (i, (when, title)) in tv.events.iter().take(2).enumerate() {
-            let y = k.t + 2.0 + i as f32 * 22.0;
-            self.label(when, &self.fonts.artist, R::new(k.l + 34.0, y, k.l + 140.0, y + 22.0), dim, sh)?;
-            self.label(title, &self.fonts.artist, R::new(k.l + 144.0, y, k.r - 4.0, y + 22.0), white, sh)?;
+
+        // Tareas rápidas (To-Do).
+        if shown(l.todo_row) {
+            let inp = l.todo_input;
+            let bg = self.brush(1.0, 1.0, 1.0, (if sh { 0.16 } else { 0.09 }) * a)?;
+            let bc = if tv.todo_focused { accent } else { (1.0, 1.0, 1.0) };
+            let ba = if tv.todo_focused { 0.85 } else if hv(Btn::TodoInput) { 0.42 } else { 0.20 };
+            let border = self.brush(bc.0, bc.1, bc.2, ba * a)?;
+            let rr = D2D1_ROUNDED_RECT { rect: d2r(inp), radiusX: 7.0, radiusY: 7.0 };
+            unsafe {
+                self.ctx.FillRoundedRectangle(&rr, &bg);
+                self.ctx.DrawRoundedRectangle(&rr, &border, if tv.todo_focused { 1.3 } else { 1.0 }, None);
+            }
+            let pad_x = inp.l + 8.0;
+            let max_w = (inp.r - inp.l - 16.0).max(20.0);
+            let txt_r = R::new(pad_x, inp.t, inp.r - 8.0, inp.b);
+            if tv.todo_input.is_empty() {
+                self.label("Nueva tarea… (ej. 18:30 Llamar)", &self.fonts.artist, txt_r, (1.0, 1.0, 1.0, 0.42 * a), sh)?;
+                if tv.todo_focused && tv.todo_caret {
+                    let caret = self.brush(accent.0, accent.1, accent.2, 0.95 * a)?;
+                    let cr = rect(pad_x, inp.t + 5.0, pad_x + 1.5, inp.b - 5.0);
+                    unsafe { self.ctx.FillRectangle(&cr, &caret) };
+                }
+            } else {
+                let display = tail_fitting(tv.todo_input, 42);
+                let tw = self.measure_text_width(&display, &self.fonts.artist, max_w);
+                self.label(&display, &self.fonts.artist, txt_r, (1.0, 1.0, 1.0, 0.96 * a), sh)?;
+                if tv.todo_focused && tv.todo_caret {
+                    let cx = (pad_x + tw + 1.5).min(inp.r - 8.0);
+                    let caret = self.brush(accent.0, accent.1, accent.2, 0.95 * a)?;
+                    let cr = rect(cx, inp.t + 5.0, cx + 1.5, inp.b - 5.0);
+                    unsafe { self.ctx.FillRectangle(&cr, &caret) };
+                }
+            }
+
+            // Botón "+" para agregar.
+            let add_bg = self.brush(1.0, 1.0, 1.0, (if hv(Btn::TodoAdd) { 0.24 } else { 0.12 }) * a)?;
+            let add_rr = D2D1_ROUNDED_RECT { rect: d2r(l.todo_add), radiusX: 7.0, radiusY: 7.0 };
+            unsafe { self.ctx.FillRoundedRectangle(&add_rr, &add_bg) };
+            self.label("\u{E710}", &self.fonts.icon, l.todo_add, (1.0, 1.0, 1.0, 0.9 * a), sh)?;
+
+            // Lista de tareas.
+            let list = l.todo_list;
+            if tv.todos.is_empty() {
+                let empty_r = R::new(list.l + 2.0, list.t, list.r, list.t + ui::TODO_ROW_H);
+                self.label("Sin tareas · escribí arriba y apretá Enter", &self.fonts.artist, empty_r, dim, sh)?;
+            } else {
+                for (i, item) in tv.todos.iter().enumerate() {
+                    let y = list.t + i as f32 * ui::TODO_ROW_H;
+                    let row = R::new(list.l, y, list.r, y + ui::TODO_ROW_H - 2.0);
+                    if hv(Btn::TodoToggle(i)) {
+                        let hbg = self.brush(1.0, 1.0, 1.0, if sh { 0.16 } else { 0.08 } * a)?;
+                        let hrr = D2D1_ROUNDED_RECT { rect: d2r(row), radiusX: 6.0, radiusY: 6.0 };
+                        unsafe { self.ctx.FillRoundedRectangle(&hrr, &hbg) };
+                    }
+                    let check_r = R::new(row.l + 2.0, row.t, row.l + 24.0, row.b);
+                    let del_r = R::new(row.r - 22.0, row.t, row.r, row.b);
+                    let mut text_right = del_r.l - 4.0;
+                    if !item.due.is_empty() {
+                        let due_r = R::new(del_r.l - 46.0, row.t + 2.0, del_r.l - 4.0, row.b - 2.0);
+                        text_right = due_r.l - 6.0;
+                        let dc = if item.done { (1.0, 1.0, 1.0) } else { accent };
+                        let dbg = self.brush(dc.0, dc.1, dc.2, (if item.done { 0.10 } else { 0.22 }) * a)?;
+                        let drr = D2D1_ROUNDED_RECT { rect: d2r(due_r), radiusX: 5.0, radiusY: 5.0 };
+                        unsafe { self.ctx.FillRoundedRectangle(&drr, &dbg) };
+                        let due_col = if item.done { (1.0, 1.0, 1.0, 0.45 * a) } else { (dc.0, dc.1, dc.2, 0.95 * a) };
+                        self.label(&item.due, &self.fonts.time, due_r, due_col, sh)?;
+                    }
+                    let check_glyph = if item.done { "\u{E73A}" } else { "\u{E739}" };
+                    let check_col = if item.done { (accent.0, accent.1, accent.2, 0.9 * a) } else { dim };
+                    self.label(check_glyph, &self.fonts.icon, check_r, check_col, sh)?;
+                    let txt_col = if item.done { (1.0, 1.0, 1.0, 0.42 * a) } else { (1.0, 1.0, 1.0, 0.92 * a) };
+                    self.label(&item.text, &self.fonts.artist, R::new(row.l + 26.0, row.t, text_right, row.b), txt_col, sh)?;
+                    if hv(Btn::TodoDelete(i)) {
+                        let dbg = self.brush(1.0, 0.35, 0.35, 0.25 * a)?;
+                        let drr = D2D1_ROUNDED_RECT { rect: d2r(del_r), radiusX: 6.0, radiusY: 6.0 };
+                        unsafe { self.ctx.FillRoundedRectangle(&drr, &dbg) };
+                    }
+                    let del_col = if hv(Btn::TodoDelete(i)) { (1.0, 0.55, 0.55, a) } else { (1.0, 1.0, 1.0, 0.45 * a) };
+                    self.label("\u{E711}", &self.fonts.icon, del_r, del_col, sh)?;
+                }
+                if tv.todo_total > ui::TODO_VISIBLE {
+                    let track = R::new(list.r + 3.0, list.t + 2.0, list.r + 5.5, list.b - 2.0);
+                    let th_bg = self.brush(1.0, 1.0, 1.0, 0.14 * a)?;
+                    let trr = D2D1_ROUNDED_RECT { rect: d2r(track), radiusX: 1.25, radiusY: 1.25 };
+                    unsafe { self.ctx.FillRoundedRectangle(&trr, &th_bg) };
+                    let h = (track.b - track.t).max(1.0);
+                    let frac = (ui::TODO_VISIBLE as f32 / tv.todo_total as f32).clamp(0.18, 1.0);
+                    let thumb_h = (h * frac).max(12.0);
+                    let max_off = tv.todo_total.saturating_sub(ui::TODO_VISIBLE).max(1) as f32;
+                    let pos = (tv.todo_scroll as f32 / max_off).clamp(0.0, 1.0);
+                    let ty = track.t + (h - thumb_h) * pos;
+                    let thumb = R::new(track.l, ty, track.r, ty + thumb_h);
+                    let thumb_br = self.brush(1.0, 1.0, 1.0, 0.52 * a)?;
+                    let tmr = D2D1_ROUNDED_RECT { rect: d2r(thumb), radiusX: 1.25, radiusY: 1.25 };
+                    unsafe { self.ctx.FillRoundedRectangle(&tmr, &thumb_br) };
+                }
+            }
         }
         Ok(())
     }
 
     fn draw_shelf(&self, sv: &ShelfView, l: &Layout, a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
         let area = l.shelf;
+        if !sv.tiles.is_empty() {
+            let count_txt = if sv.tiles.len() == 1 {
+                "1 archivo · clic derecho quita".to_string()
+            } else {
+                format!("{} archivos · clic derecho quita", sv.tiles.len())
+            };
+            let hdr_r = R::new(area.l + 4.0, area.t + 2.0, l.shelf_clear.l - 8.0, area.t + 22.0);
+            self.label(&count_txt, &self.fonts.artist, hdr_r, (1.0, 1.0, 1.0, 0.52 * a), sh)?;
+
+            // Botón "Borrar todo".
+            let clr = l.shelf_clear;
+            let hv_clr = hover == Some(Btn::ShelfClear);
+            let bg = if hv_clr {
+                self.brush(1.0, 0.38, 0.38, 0.32 * a)?
+            } else {
+                self.brush(1.0, 1.0, 1.0, (if sh { 0.18 } else { 0.11 }) * a)?
+            };
+            let rr = D2D1_ROUNDED_RECT { rect: d2r(clr), radiusX: 7.0, radiusY: 7.0 };
+            unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+            let txt_col = if hv_clr { (1.0, 0.72, 0.72, a) } else { (1.0, 1.0, 1.0, 0.85 * a) };
+            self.label("Borrar todo", &self.fonts.time, clr, txt_col, sh)?;
+        }
         if sv.tiles.is_empty() || sv.drop_hover {
             // Zona para soltar: borde punteado, ámbar cuando hay algo encima.
             let (r, g, b, al) = if sv.drop_hover { (1.0, 0.72, 0.3, 0.95) } else { (1.0, 1.0, 1.0, 0.35) };
@@ -884,13 +1014,9 @@ impl Renderer {
             let zone = R::new(area.l, area.t + 4.0, area.r, area.b);
             let rr = D2D1_ROUNDED_RECT { rect: d2r(zone), radiusX: 12.0, radiusY: 12.0 };
             unsafe { self.ctx.DrawRoundedRectangle(&rr, &br, 1.5, &dash) };
-            if sv.tiles.is_empty() || sv.drop_hover {
-                let msg = if sv.drop_hover { "Soltá para guardar en el estante" } else { "Arrastrá archivos acá para tenerlos a mano" };
-                if sv.tiles.is_empty() || sv.drop_hover {
-                    let txt = if sv.tiles.is_empty() { zone } else { R::new(zone.l, zone.b - 24.0, zone.r, zone.b - 4.0) };
-                    self.label(msg, &self.fonts.lyric, txt, (r, g, b, al * a), sh)?;
-                }
-            }
+            let msg = if sv.drop_hover { "Soltá para guardar en el estante" } else { "Arrastrá archivos acá para tenerlos a mano" };
+            let txt = if sv.tiles.is_empty() { zone } else { R::new(zone.l, zone.b - 22.0, zone.r, zone.b - 2.0) };
+            self.label(msg, &self.fonts.lyric, txt, (r, g, b, al * a), sh)?;
         }
         let n = sv.tiles.len();
         for (i, (glyph, name)) in sv.tiles.iter().enumerate() {
@@ -902,6 +1028,36 @@ impl Renderer {
             }
             self.label(glyph, &self.fonts.icon_big, R::new(t.l, t.t + 4.0, t.r, t.t + 38.0), (1.0, 1.0, 1.0, 0.9 * a), sh)?;
             self.label(name, &self.fonts.tile, R::new(t.l + 3.0, t.t + 40.0, t.r - 3.0, t.b - 4.0), (1.0, 1.0, 1.0, 0.8 * a), sh)?;
+        }
+        Ok(())
+    }
+
+    /// Puntitos indicadores de página al pie del panel expandido.
+    fn draw_page_dots(
+        &self,
+        l: &Layout,
+        active: usize,
+        accent: (f32, f32, f32),
+        a: f32,
+        sh: bool,
+        hover: Option<Btn>,
+    ) -> Result<()> {
+        for i in 0..l.dots_count {
+            let r = l.page_dot_rect(i, active);
+            let is_cur = i == active;
+            let is_hv = hover == Some(Btn::PageDot(i));
+            if sh {
+                let s = self.brush(0.0, 0.0, 0.0, 0.45 * a)?;
+                let sr = D2D1_ROUNDED_RECT { rect: d2r(r.inflate(1.0)), radiusX: 3.5, radiusY: 3.5 };
+                unsafe { self.ctx.FillRoundedRectangle(&sr, &s) };
+            }
+            let br = if is_cur {
+                self.brush(accent.0, accent.1, accent.2, 0.95 * a)?
+            } else {
+                self.brush(1.0, 1.0, 1.0, (if is_hv { 0.65 } else { 0.28 }) * a)?
+            };
+            let rr = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 2.5, radiusY: 2.5 };
+            unsafe { self.ctx.FillRoundedRectangle(&rr, &br) };
         }
         Ok(())
     }

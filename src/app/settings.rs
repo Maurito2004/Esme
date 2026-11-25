@@ -116,6 +116,7 @@ impl App {
                             row("Agua", "", tog(c.hoy_agua, Key::HoyAgua)),
                             row("Clima", "", tog(c.hoy_clima, Key::HoyClima)),
                             row("Calendario", "", tog(c.hoy_calendario, Key::HoyCal)),
+                            row("Tareas (To-Do)", "Lista rápida con avisos por hora (HH:MM)", tog(c.hoy_todo, Key::HoyTodo)),
                         ],
                     },
                     Group {
@@ -199,6 +200,7 @@ impl App {
                     row("Cargador", "Notebooks: al enchufar o desenchufar", tog(c.aviso_energia, Key::AvisoEnergia)),
                     row("Brillo", "Notebooks: al cambiar el brillo de la pantalla", tog(c.aviso_brillo, Key::AvisoBrillo)),
                     row("Batería baja", "Notebooks: al bajar de 20 % y de 10 %", tog(c.aviso_bateria, Key::AvisoBateria)),
+                    row("Wi-Fi", "Al conectar o desconectar una red Wi-Fi", tog(c.aviso_wifi, Key::AvisoWifi)),
                 ],
             }],
             _ => vec![
@@ -436,19 +438,24 @@ impl App {
             Key::HoyAgua => c.hoy_agua = !c.hoy_agua,
             Key::HoyClima => c.hoy_clima = !c.hoy_clima,
             Key::HoyCal => c.hoy_calendario = !c.hoy_calendario,
+            Key::HoyTodo => c.hoy_todo = !c.hoy_todo,
             Key::AvisoVolumen => c.aviso_volumen = !c.aviso_volumen,
             Key::AvisoAudio => c.aviso_audio = !c.aviso_audio,
             Key::AvisoTeclado => c.aviso_teclado = !c.aviso_teclado,
             Key::AvisoEnergia => c.aviso_energia = !c.aviso_energia,
             Key::AvisoBrillo => c.aviso_brillo = !c.aviso_brillo,
             Key::AvisoBateria => c.aviso_bateria = !c.aviso_bateria,
+            Key::AvisoWifi => c.aviso_wifi = !c.aviso_wifi,
             _ => return,
         }
         let _ = self.cfg.save();
         if matches!(k, Key::HoyClima | Key::HoyCal) && self.today_loaded {
             self.refresh_data();
         }
-        if matches!(k, Key::HoyPomo | Key::HoyAgua | Key::HoyClima | Key::HoyCal) {
+        if matches!(k, Key::HoyPomo | Key::HoyAgua | Key::HoyClima | Key::HoyCal | Key::HoyTodo) {
+            if k == Key::HoyTodo && !self.cfg.hoy_todo {
+                self.focus_todo_input(false);
+            }
             self.retarget();
             self.refresh();
         }

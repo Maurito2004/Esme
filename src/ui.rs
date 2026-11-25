@@ -3,7 +3,9 @@
 
 // Lienzo fijo donde cabe todo (incluido el rebote del resorte).
 pub const CANVAS_W: f32 = 520.0;
-pub const CANVAS_H: f32 = 340.0;
+pub const CANVAS_H: f32 = 480.0;
+/// Franja inferior reservada a los puntitos indicadores de página del panel expandido.
+pub const PAGE_DOTS_H: f32 = 14.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dims {
@@ -29,9 +31,9 @@ pub const SHELF_TILE_W: f32 = 72.0;
 pub const SHELF_TILE_H: f32 = 66.0;
 pub const SHELF_COLS: usize = 5;
 
-/// Alto extra del estante según cuántos archivos hay.
+/// Alto extra del estante según cuántos archivos hay (incluye cabecera con "Borrar todo").
 pub fn shelf_extra(n: usize) -> f32 {
-    if n == 0 { 64.0 } else { n.div_ceil(SHELF_COLS) as f32 * SHELF_TILE_H + 14.0 }
+    if n == 0 { 64.0 } else { n.div_ceil(SHELF_COLS) as f32 * SHELF_TILE_H + 38.0 }
 }
 
 /// Filas del panel "Hoy" (máscara de bits; TODAY_OPEN = panel abierto).
@@ -39,16 +41,24 @@ pub const TODAY_POMO: u8 = 1;
 pub const TODAY_WATER: u8 = 2;
 pub const TODAY_WEATHER: u8 = 4;
 pub const TODAY_CAL: u8 = 8;
-pub const TODAY_OPEN: u8 = 0x10;
+pub const TODAY_TODO: u8 = 16;
+pub const TODAY_OPEN: u8 = 0x20;
 
-/// Alto extra del panel "Hoy" según qué filas están visibles (todas = 168).
-pub fn today_extra(mask: u8) -> f32 {
+pub const TODO_ROW_H: f32 = 24.0;
+pub const TODO_VISIBLE: usize = 3;
+
+/// Alto extra del panel "Hoy" según qué filas están visibles y cuántas tareas hay.
+pub fn today_extra(mask: u8, todo_n: usize) -> f32 {
     let mut h = 2.0;
     if mask & TODAY_POMO != 0 { h += 40.0; }
     if mask & TODAY_WATER != 0 { h += 40.0; }
     if mask & TODAY_WEATHER != 0 { h += 32.0; }
     if mask & TODAY_CAL != 0 { h += 54.0; }
-    if mask & 0x0F == 0 { h += 32.0; }
+    if mask & TODAY_TODO != 0 {
+        let rows = todo_n.clamp(1, TODO_VISIBLE) as f32;
+        h += 34.0 + rows * TODO_ROW_H + 6.0;
+    }
+    if mask & 0x1F == 0 { h += 32.0; }
     h
 }
 
@@ -82,17 +92,23 @@ pub enum Btn {
     ClipItem(usize),
     Shelf,
     ShelfItem(usize),
+    ShelfClear,
     Today,
     PomoToggle,
     PomoReset,
     WaterAdd,
     WaterSub,
+    TodoInput,
+    TodoAdd,
+    TodoToggle(usize),
+    TodoDelete(usize),
     Ask,
     AskMode,
     AskInput,
     AskSummarize,
     AskSpellcheck,
     AskCopy,
+    PageDot(usize),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -147,12 +163,17 @@ pub struct Layout {
     pub clip: R,
     pub shelf_btn: R,
     pub shelf: R,
+    pub shelf_clear: R,
     pub today_btn: R,
     pub today: R,
     pub pomo_row: R,
     pub water_row: R,
     pub weather_row: R,
     pub cal_row: R,
+    pub todo_row: R,
+    pub todo_input: R,
+    pub todo_add: R,
+    pub todo_list: R,
     pub pomo_toggle: R,
     pub pomo_reset: R,
     pub water_add: R,
@@ -165,6 +186,8 @@ pub struct Layout {
     pub ask_input: R,
     pub ask_response: R,
     pub ask_copy: R,
+    pub dots_area: R,
+    pub dots_count: usize,
 }
 
 impl Layout {
@@ -200,7 +223,7 @@ impl Layout {
             l.shelf_btn = btn(x1 - 98.0);
             l.today_btn = btn(x1 - 132.0);
             l.ask_btn = btn(x1 - 166.0);
-            let sub = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+            let sub = R::new(x0 + 16.0, y0 + EXP_MEDIA.h - 6.0, x1 - 16.0, y0 + d.h - PAGE_DOTS_H - 6.0);
             if today != 0 {
                 l.set_today(sub, today);
             }
@@ -209,6 +232,7 @@ impl Layout {
             }
             if shelf {
                 l.shelf = sub;
+                l.shelf_clear = R::new(sub.r - 84.0, sub.t + 2.0, sub.r - 2.0, sub.t + 22.0);
             }
             if ask {
                 l.set_ask(sub);
@@ -218,7 +242,7 @@ impl Layout {
             l.t_right = R::new(x1 - 56.0, ty - 9.0, x1 - 12.0, ty + 9.0);
             l.track = R::new(x0 + 60.0, ty - 2.0, x1 - 60.0, ty + 2.0);
             if lyrics {
-                l.lyrics = R::new(x0 + 18.0, y0 + EXP_MEDIA.h - 6.0, x1 - 18.0, y0 + d.h - 12.0);
+                l.lyrics = R::new(x0 + 18.0, y0 + EXP_MEDIA.h - 6.0, x1 - 18.0, y0 + d.h - PAGE_DOTS_H - 8.0);
             }
         } else {
             l.clock = R::new(x0, y0 + 10.0, x1, y0 + 58.0);
@@ -227,7 +251,7 @@ impl Layout {
             l.ask_btn = R::new(x1 - 84.0, y0 + 30.0, x1 - 50.0, y0 + 58.0);
             l.shelf_btn = R::new(x0 + 12.0, y0 + 30.0, x0 + 46.0, y0 + 58.0);
             l.today_btn = R::new(x0 + 50.0, y0 + 30.0, x0 + 84.0, y0 + 58.0);
-            let sub = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - 8.0);
+            let sub = R::new(x0 + 16.0, y0 + EXP_CLOCK.h - 6.0, x1 - 16.0, y0 + d.h - PAGE_DOTS_H - 6.0);
             if today != 0 {
                 l.set_today(sub, today);
             }
@@ -236,11 +260,14 @@ impl Layout {
             }
             if shelf {
                 l.shelf = sub;
+                l.shelf_clear = R::new(sub.r - 84.0, sub.t + 2.0, sub.r - 2.0, sub.t + 22.0);
             }
             if ask {
                 l.set_ask(sub);
             }
         }
+        l.dots_count = if media { 6 } else { 5 };
+        l.dots_area = R::new(x0, y0 + d.h - PAGE_DOTS_H - 2.0, x1, y0 + d.h - 2.0);
         l
     }
 
@@ -260,6 +287,17 @@ impl Layout {
         self.water_row = row(mask & TODAY_WATER != 0, 4.0, 36.0, 40.0);
         self.weather_row = row(mask & TODAY_WEATHER != 0, 4.0, 28.0, 32.0);
         self.cal_row = row(mask & TODAY_CAL != 0, 2.0, 52.0, 54.0);
+        if mask & TODAY_TODO != 0 {
+            self.todo_row = R::new(a.l, y + 4.0, a.r, a.b);
+            self.todo_input = R::new(a.l + 4.0, y + 6.0, a.r - 34.0, y + 32.0);
+            self.todo_add = R::new(a.r - 30.0, y + 6.0, a.r - 2.0, y + 32.0);
+            self.todo_list = R::new(a.l + 4.0, y + 36.0, a.r - 2.0, a.b);
+        } else {
+            self.todo_row = OFF;
+            self.todo_input = OFF;
+            self.todo_add = OFF;
+            self.todo_list = OFF;
+        }
         let b = |row: R, k: f32| {
             if row.l <= OFF.l { OFF } else { R::new(row.r - 36.0 * k - 30.0, row.t + 4.0, row.r - 36.0 * k, row.b - 4.0) }
         };
@@ -288,11 +326,38 @@ impl Layout {
         let cols = n.clamp(1, SHELF_COLS);
         let row_w = cols as f32 * SHELF_TILE_W;
         let x = (self.shelf.l + self.shelf.r) / 2.0 - row_w / 2.0 + (i % SHELF_COLS) as f32 * SHELF_TILE_W;
-        let y = self.shelf.t + 6.0 + (i / SHELF_COLS) as f32 * SHELF_TILE_H;
+        let y = self.shelf.t + 26.0 + (i / SHELF_COLS) as f32 * SHELF_TILE_H;
         R::new(x + 2.0, y, x + SHELF_TILE_W - 2.0, y + SHELF_TILE_H - 4.0)
     }
 
-    pub fn hit(&self, x: f32, y: f32, lyric_scroll: f32, n_lines: usize, clip_n: usize, shelf_n: usize) -> Option<Btn> {
+    /// Rectángulo del puntito indicador de página `i` (el activo es más ancho tipo píldora).
+    pub fn page_dot_rect(&self, i: usize, active: usize) -> R {
+        let n = self.dots_count.max(1);
+        let gap = 6.0;
+        let active_w = 14.0;
+        let idle_w = 5.0;
+        let total_w = n.saturating_sub(1) as f32 * (idle_w + gap) + active_w;
+        let mut x = (self.dots_area.l + self.dots_area.r) / 2.0 - total_w / 2.0;
+        for j in 0..i {
+            x += if j == active { active_w } else { idle_w } + gap;
+        }
+        let w = if i == active { active_w } else { idle_w };
+        let cy = self.dots_area.cy();
+        R::new(x, cy - 2.5, x + w, cy + 2.5)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn hit(
+        &self,
+        x: f32,
+        y: f32,
+        lyric_scroll: f32,
+        n_lines: usize,
+        clip_n: usize,
+        shelf_n: usize,
+        todo_n: usize,
+        active_page: usize,
+    ) -> Option<Btn> {
         let pad = 4.0;
         if self.shelf_btn.inflate(pad).contains(x, y) {
             return Some(Btn::Shelf);
@@ -324,11 +389,26 @@ impl Layout {
                 (self.pomo_reset, Btn::PomoReset),
                 (self.water_add, Btn::WaterAdd),
                 (self.water_sub, Btn::WaterSub),
+                (self.todo_input, Btn::TodoInput),
+                (self.todo_add, Btn::TodoAdd),
             ] {
-                if r.inflate(2.0).contains(x, y) {
+                if r.l > OFF.l && r.inflate(2.0).contains(x, y) {
                     return Some(b);
                 }
             }
+            if todo_n > 0 && self.todo_list.l > OFF.l && self.todo_list.contains(x, y) {
+                let row = ((y - self.todo_list.t) / TODO_ROW_H).floor();
+                if row >= 0.0 && (row as usize) < todo_n.min(TODO_VISIBLE) {
+                    let idx = row as usize;
+                    if x >= self.todo_list.r - 24.0 {
+                        return Some(Btn::TodoDelete(idx));
+                    }
+                    return Some(Btn::TodoToggle(idx));
+                }
+            }
+        }
+        if shelf_n > 0 && self.shelf_clear.r > self.shelf_clear.l && self.shelf_clear.inflate(2.0).contains(x, y) {
+            return Some(Btn::ShelfClear);
         }
         for i in 0..shelf_n {
             if self.shelf_tile(i, shelf_n).contains(x, y) {
@@ -364,6 +444,11 @@ impl Layout {
             let idx = (lyric_scroll + off).round();
             if idx >= 0.0 && (idx as usize) < n_lines {
                 return Some(Btn::LyricLine(idx as usize));
+            }
+        }
+        for i in 0..self.dots_count {
+            if self.page_dot_rect(i, active_page).inflate(4.0).contains(x, y) {
+                return Some(Btn::PageDot(i));
             }
         }
         None

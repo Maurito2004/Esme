@@ -95,6 +95,7 @@ impl App {
             }
             T_CLOCK => {
                 self.update_clock();
+                self.check_todo_due();
                 // Contraído en modo mínimo el reloj no se ve: no hay nada que redibujar.
                 let visible = !(self.cfg.notch_minimo && !self.lyric_pill() && self.expand.value == 0.0);
                 if visible {
@@ -127,11 +128,15 @@ impl App {
             T_POMO => self.on_pomo_tick(),
             T_QTIMER => self.on_quick_timer_tick(),
             T_CARET => {
-                let focused = self.ask_on && self.ask.as_ref().map(|a| a.focus).unwrap_or(false);
-                if focused {
+                let ask_focused = self.ask_on && self.ask.as_ref().map(|a| a.focus).unwrap_or(false);
+                let todo_focused = self.today_on && self.todo_focus;
+                if ask_focused {
                     if let Some(ask) = self.ask.as_mut() {
                         ask.caret_visible = !ask.caret_visible;
                     }
+                    self.refresh();
+                } else if todo_focused {
+                    self.todo_caret = !self.todo_caret;
                     self.refresh();
                 } else {
                     unsafe {
