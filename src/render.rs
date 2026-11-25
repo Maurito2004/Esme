@@ -25,10 +25,47 @@ pub enum Collapsed<'a> {
     Mascot { time: &'a str, eyes: Eyes, pet: Pet },
     Media { time: &'a str },
     Lyric(&'a str),
+    /// Letra sincronizada en la píldora con desplazamiento vertical suave al cambiar de línea.
+    LyricRoll { cur: &'a str, next: &'a str, frac: f32 },
     /// Overlay del sistema: ícono, texto y, si corresponde, un nivel 0..1 (volumen).
     Overlay { glyph: &'a str, text: &'a str, level: Option<f32> },
+    /// Píldora de cargador: anillo circular animado y porcentaje que cuenta hasta el valor actual.
+    Charger { charging: bool, pct: f32, ring: f32 },
 }
 
+/// Instantánea propietaria del contenido contraído para el morph saliente (~220 ms).
+#[derive(Clone)]
+pub enum CollapsedSnap {
+    Clock(String),
+    Minimal,
+    Mascot { time: String, eyes: Eyes, pet: Pet },
+    Media { time: String },
+    Lyric(String),
+    LyricRoll { cur: String, next: String, frac: f32 },
+    Overlay { glyph: &'static str, text: String, level: Option<f32> },
+    Charger { charging: bool, pct: f32, ring: f32 },
+}
+
+impl CollapsedSnap {
+    pub fn as_ref(&self) -> Collapsed<'_> {
+        match self {
+            Self::Clock(t) => Collapsed::Clock(t.as_str()),
+            Self::Minimal => Collapsed::Minimal,
+            Self::Mascot { time, eyes, pet } => Collapsed::Mascot { time: time.as_str(), eyes: *eyes, pet: *pet },
+            Self::Media { time } => Collapsed::Media { time: time.as_str() },
+            Self::Lyric(s) => Collapsed::Lyric(s.as_str()),
+            Self::LyricRoll { cur, next, frac } => {
+                Collapsed::LyricRoll { cur: cur.as_str(), next: next.as_str(), frac: *frac }
+            }
+            Self::Overlay { glyph, text, level } => Collapsed::Overlay { glyph: *glyph, text: text.as_str(), level: *level },
+            Self::Charger { charging, pct, ring } => {
+                Collapsed::Charger { charging: *charging, pct: *pct, ring: *ring }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum LyricsView<'a> {
     Message(&'a str),
     Synced { lines: &'a [(f64, String)], scroll: f32, current: usize },
@@ -55,6 +92,13 @@ pub struct TodayView<'a> {
     pub pomo_running: bool,
     pub pomo_progress: f32,
     pub water: u32,
+    pub water_prev: u32,
+    pub water_num_t: f32,
+    pub water_dir: f32,
+    pub water_hours: [u32; 24],
+    pub water_cur_hour: usize,
+    pub water_bars_t: f32,
+    pub water_bump: Option<(usize, f32)>,
     pub goal: u32,
     pub weather_glyph: &'a str,
     pub weather: &'a str,
@@ -63,6 +107,12 @@ pub struct TodayView<'a> {
     pub cal_hint: &'a str,
     /// Tareas visibles en la ventana actual del To-Do.
     pub todos: &'a [crate::todo::TodoItem],
+    pub todo_strikes: &'a [f32],
+    pub todo_pop: Option<(usize, f32)>,
+    pub todo_done: usize,
+    pub todo_done_prev: usize,
+    pub todo_count_t: f32,
+    pub todo_count_dir: f32,
     pub todo_total: usize,
     pub todo_scroll: usize,
     pub todo_input: &'a str,
@@ -75,6 +125,10 @@ pub struct ShelfView<'a> {
     pub tiles: &'a [(&'static str, String)],
     /// Hay archivos arrastrándose encima: resaltamos la zona.
     pub drop_hover: bool,
+    /// Entrada animada (0..1) de los archivos recién soltados (escala 0.9 → 1.0 + enfoque).
+    pub enter: f32,
+    /// Cuántos archivos al inicio del estante están entrando en este momento.
+    pub new_count: usize,
 }
 
 /// Mezclador: (nombre, volumen 0..1, silenciado).
@@ -114,6 +168,16 @@ pub enum Expanded<'a> {
     Media(MediaView<'a>),
 }
 
+/// Subpanel saliente durante una transición entre páginas del panel expandido (~220 ms).
+pub enum PrevSub<'a> {
+    Ask(AskView<'a>),
+    Today(TodayView<'a>),
+    Shelf(ShelfView<'a>),
+    Clip(ClipView<'a>),
+    Mixer(MixerView<'a>),
+    Lyrics(LyricsView<'a>),
+}
+
 pub struct Frame<'a> {
     pub cx: f32,
     /// Forma negra (DIPs).
@@ -123,12 +187,24 @@ pub struct Frame<'a> {
     pub ear: f32,
     /// 0 = contraído, 1 = expandido (puede pasarse un poco por el rebote).
     pub expand: f32,
+    /// Visibilidad del contenido expandido (cierre en dos tiempos: 1→0 antes de encoger la forma).
+    pub content_vis: f32,
     /// Modo transparente: la píldora queda chica y el contenido flota debajo.
     pub transparent: bool,
     pub collapsed: Collapsed<'a>,
+    /// Morph de contenido en la píldora contraída (0→1 en ~220 ms).
+    pub pill_morph: f32,
+    pub prev_collapsed: Option<&'a CollapsedSnap>,
     pub expanded: Expanded<'a>,
     pub layout: Layout,
+    /// Morph + deslizamiento entre páginas del panel expandido (0→1 en ~220 ms).
+    pub page_morph: f32,
+    /// +1 si sube el índice (entra desde la derecha), -1 si baja (desde la izquierda), 0 si solo morph.
+    pub page_dir: f32,
+    pub prev_sub: Option<(Layout, PrevSub<'a>)>,
     pub hover: Option<Btn>,
+    /// Botón presionado y su escala elástica (1.0 → 0.92 → 1.0).
+    pub pressed: Option<(Btn, f32)>,
     /// 0..1: cuánto se ve la mascota (desplaza el reloj).
     pub mascot_vis: f32,
     /// Panel del portapapeles abierto.
@@ -143,6 +219,10 @@ pub struct Frame<'a> {
     pub mixer: Option<MixerView<'a>>,
     /// Color de acento: el de los ojos de la mascota (ámbar en Esme, blanco en el gato).
     pub accent: (f32, f32, f32),
+    /// Línea de luz estática azul → acento pegada al borde inferior de la píldora cerrada.
+    pub pill_glow_line: bool,
+    /// Brillo suave que "respira" (~4 s) con Pomodoro corriendo en la píldora cerrada: `(fase 0..1, es_foco)`.
+    pub pomo_breath: Option<(f32, bool)>,
     /// Píldora flotante: separación (DIPs) con el borde de arriba; 0 = pegada (notch clásico).
     pub float_gap: f32,
     /// Ecualizador vivo: segundos desde que arrancó la animación (None = barras quietas).
@@ -490,15 +570,27 @@ impl Renderer {
                 self.ctx.DrawGeometry(&geo, &gb, 1.5, None);
             }
 
+            // Línea de luz estática azul → acento pegada al borde inferior de la píldora cerrada.
+            let line_vis = if f.transparent { 1.0 } else { clamp01(1.0 - f.expand * 2.2) };
+            if f.pill_glow_line && line_vis > 0.01 && !matches!(f.collapsed, Collapsed::Minimal) && f.shape_h >= 12.0 {
+                self.draw_pill_glow_line(f, line_vis)?;
+            }
+            // Pomodoro corriendo con la píldora cerrada: brillo suave que respira (~4 s, máx. 15 FPS).
+            if let Some((phase, focus)) = f.pomo_breath {
+                if line_vis > 0.01 && f.shape_h >= 12.0 {
+                    self.draw_pomo_breath(f, &geo, phase, focus, line_vis)?;
+                }
+            }
+
             // Contenido contraído: en modo negro se desvanece al expandir; en transparente queda.
             let a_small = if f.transparent { 1.0 } else { clamp01(1.0 - f.expand * 2.5) };
             if a_small > 0.01 {
-                self.draw_collapsed(f, a_small)?;
+                self.draw_collapsed(f, &geo, a_small)?;
             }
-            // Contenido expandido: aparece en la segunda mitad de la animación.
-            let a_big = clamp01((f.expand - 0.45) / 0.55);
+            // Contenido expandido: aparece al abrir y se va primero (~120 ms) antes de encoger al cerrar.
+            let a_big = clamp01((f.expand - 0.45) / 0.55) * clamp01((f.content_vis - 0.06) / 0.94);
             if a_big > 0.01 {
-                self.draw_expanded(f, a_big)?;
+                self.draw_expanded(f, &geo, a_big)?;
             }
 
             self.ctx.EndDraw(None, None)?;
@@ -511,12 +603,221 @@ impl Renderer {
         }
     }
 
-    fn draw_collapsed(&self, f: &Frame, a: f32) -> Result<()> {
+    /// Transformación afín (escala uniforme `s` alrededor de `(px, py)` + traslación `(dx, dy)` + `self.oy`).
+    fn transform_at(&self, s: f32, px: f32, py: f32, dx: f32, dy: f32) -> Matrix3x2 {
+        Matrix3x2 {
+            M11: s,
+            M12: 0.0,
+            M21: 0.0,
+            M22: s,
+            M31: px * (1.0 - s) + dx,
+            M32: py * (1.0 - s) + dy + self.oy,
+        }
+    }
+
+    /// Aplica una escala local `s` alrededor de `(px, py)` componiéndola con la transformación activa
+    /// (preserva `self.oy` y cualquier morph/deslizamiento de página) y restaura la matriz anterior.
+    fn with_local_scale<F>(&self, s: f32, px: f32, py: f32, draw: F) -> Result<()>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        if (s - 1.0).abs() < 0.001 {
+            return draw();
+        }
+        unsafe {
+            let mut prev = Matrix3x2::identity();
+            self.ctx.GetTransform(&mut prev);
+            let local = Matrix3x2 {
+                M11: s,
+                M12: 0.0,
+                M21: 0.0,
+                M22: s,
+                M31: px * (1.0 - s),
+                M32: py * (1.0 - s),
+            };
+            let combined = mul_m3x2(local, prev);
+            self.ctx.SetTransform(&combined);
+            let res = draw();
+            self.ctx.SetTransform(&prev);
+            res
+        }
+    }
+
+    /// Brillo suave que respira en el contorno de la píldora cerrada mientras corre el Pomodoro.
+    fn draw_pomo_breath(&self, f: &Frame, geo: &ID2D1PathGeometry1, phase: f32, focus: bool, vis: f32) -> Result<()> {
+        let p = clamp01(phase);
+        let c = if focus { (1.0, 0.42, 0.32) } else { (0.35, 0.88, 0.58) };
+        let halo = self.brush(c.0, c.1, c.2, (0.06 + 0.16 * p) * vis)?;
+        let rim = self.brush(c.0, c.1, c.2, (0.18 + 0.52 * p) * vis)?;
+        unsafe {
+            self.ctx.DrawGeometry(geo, &halo, 3.2, None);
+            self.ctx.DrawGeometry(geo, &rim, 1.35, None);
+        }
+        // Sutil reflejo inferior pulsante dentro de la píldora.
+        let h = f.shape_h;
+        let inset = f.radius.min(h * 0.5).max(10.0);
+        let x0 = f.cx - f.shape_w / 2.0 + inset;
+        let x1 = f.cx + f.shape_w / 2.0 - inset;
+        if x1 - x0 >= 12.0 {
+            let stops = [
+                D2D1_GRADIENT_STOP { position: 0.0, color: rgba(c.0, c.1, c.2, 0.0) },
+                D2D1_GRADIENT_STOP { position: 0.5, color: rgba(c.0, c.1, c.2, (0.14 + 0.32 * p) * vis) },
+                D2D1_GRADIENT_STOP { position: 1.0, color: rgba(c.0, c.1, c.2, 0.0) },
+            ];
+            unsafe {
+                let coll = self.ctx.CreateGradientStopCollection(
+                    &stops,
+                    D2D1_COLOR_SPACE_SRGB,
+                    D2D1_COLOR_SPACE_SRGB,
+                    D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                    D2D1_EXTEND_MODE_CLAMP,
+                    D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
+                )?;
+                let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: pt(x0, h - 1.5),
+                    endPoint: pt(x1, h - 1.5),
+                };
+                let gb = self.ctx.CreateLinearGradientBrush(&props, None, &coll)?;
+                let rr = D2D1_ROUNDED_RECT { rect: rect(x0, h - 2.8, x1, h - 0.4), radiusX: 1.2, radiusY: 1.2 };
+                self.ctx.FillRoundedRectangle(&rr, &gb);
+            }
+        }
+        Ok(())
+    }
+
+    /// Recorta temporalmente el dibujo dentro de la geometría del notch/píldora durante transiciones.
+    fn with_geo_mask<F>(&self, geo: &ID2D1PathGeometry1, bounds: D2D_RECT_F, draw: F) -> Result<()>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        unsafe {
+            let mask: ID2D1Geometry = geo.cast()?;
+            let params = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: bounds,
+                geometricMask: std::mem::ManuallyDrop::new(Some(mask)),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: Matrix3x2::identity(),
+                opacity: 1.0,
+                opacityBrush: std::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            self.ctx.PushLayer(&params, None);
+            let res = draw();
+            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy));
+            self.ctx.PopLayer();
+            let _ = std::mem::ManuallyDrop::into_inner(params.geometricMask);
+            res
+        }
+    }
+
+    /// Línea fina con degradé azul → acento pegada al borde inferior de la píldora cerrada (sin costo en reposo).
+    fn draw_pill_glow_line(&self, f: &Frame, vis: f32) -> Result<()> {
+        let h = f.shape_h;
+        let r_bot = if f.float_gap > 0.0 {
+            if h <= 40.0 { h / 2.0 } else { f.radius.max(16.0) }.min(h / 2.0).min(f.shape_w / 2.0).max(0.0)
+        } else {
+            let ear = f.ear.min(h * 0.5).max(0.0);
+            f.radius.min(h - ear).min(f.shape_w / 2.0).max(0.0)
+        };
+        let inset = r_bot.max(10.0);
+        let x0 = f.cx - f.shape_w / 2.0 + inset;
+        let x1 = f.cx + f.shape_w / 2.0 - inset;
+        if x1 - x0 < 12.0 {
+            return Ok(());
+        }
+        let mid = (
+            (BLUE.0 + f.accent.0) * 0.5,
+            (BLUE.1 + f.accent.1) * 0.5,
+            (BLUE.2 + f.accent.2) * 0.5,
+        );
+        let halo_stops = [
+            D2D1_GRADIENT_STOP { position: 0.0, color: rgba(BLUE.0, BLUE.1, BLUE.2, 0.0) },
+            D2D1_GRADIENT_STOP { position: 0.18, color: rgba(BLUE.0, BLUE.1, BLUE.2, 0.24 * vis) },
+            D2D1_GRADIENT_STOP { position: 0.5, color: rgba(mid.0, mid.1, mid.2, 0.28 * vis) },
+            D2D1_GRADIENT_STOP { position: 0.82, color: rgba(f.accent.0, f.accent.1, f.accent.2, 0.24 * vis) },
+            D2D1_GRADIENT_STOP { position: 1.0, color: rgba(f.accent.0, f.accent.1, f.accent.2, 0.0) },
+        ];
+        let stops = [
+            D2D1_GRADIENT_STOP { position: 0.0, color: rgba(BLUE.0, BLUE.1, BLUE.2, 0.0) },
+            D2D1_GRADIENT_STOP { position: 0.14, color: rgba(BLUE.0, BLUE.1, BLUE.2, 0.85 * vis) },
+            D2D1_GRADIENT_STOP { position: 0.5, color: rgba(mid.0, mid.1, mid.2, 0.92 * vis) },
+            D2D1_GRADIENT_STOP { position: 0.86, color: rgba(f.accent.0, f.accent.1, f.accent.2, 0.85 * vis) },
+            D2D1_GRADIENT_STOP { position: 1.0, color: rgba(f.accent.0, f.accent.1, f.accent.2, 0.0) },
+        ];
+        unsafe {
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: pt(x0, h - 1.0),
+                endPoint: pt(x1, h - 1.0),
+            };
+            let halo_coll = self.ctx.CreateGradientStopCollection(
+                &halo_stops,
+                D2D1_COLOR_SPACE_SRGB,
+                D2D1_COLOR_SPACE_SRGB,
+                D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                D2D1_EXTEND_MODE_CLAMP,
+                D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
+            )?;
+            let halo_gb = self.ctx.CreateLinearGradientBrush(&props, None, &halo_coll)?;
+            let halo_rr = D2D1_ROUNDED_RECT { rect: rect(x0, h - 3.0, x1, h - 0.3), radiusX: 1.35, radiusY: 1.35 };
+            self.ctx.FillRoundedRectangle(&halo_rr, &halo_gb);
+
+            let coll = self.ctx.CreateGradientStopCollection(
+                &stops,
+                D2D1_COLOR_SPACE_SRGB,
+                D2D1_COLOR_SPACE_SRGB,
+                D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                D2D1_EXTEND_MODE_CLAMP,
+                D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
+            )?;
+            let gb = self.ctx.CreateLinearGradientBrush(&props, None, &coll)?;
+            let line_rr = D2D1_ROUNDED_RECT { rect: rect(x0, h - 1.7, x1, h - 0.3), radiusX: 0.7, radiusY: 0.7 };
+            self.ctx.FillRoundedRectangle(&line_rr, &gb);
+        }
+        Ok(())
+    }
+
+    fn draw_collapsed(&self, f: &Frame, geo: &ID2D1PathGeometry1, a: f32) -> Result<()> {
+        let m = clamp01(f.pill_morph);
+        let py = f.shape_h / 2.0;
+        if m < 0.999 {
+            if let Some(prev) = f.prev_collapsed {
+                let bounds = rect(f.cx - f.shape_w / 2.0 - f.ear - 2.0, -2.0, f.cx + f.shape_w / 2.0 + f.ear + 2.0, f.shape_h + 2.0);
+                let out_t = clamp01(m * 1.45);
+                let in_t = clamp01((m - 0.15) / 0.85);
+                return self.with_geo_mask(geo, bounds, || {
+                    let a_out = a * (1.0 - out_t);
+                    if a_out > 0.01 {
+                        let s_out = 1.0 - 0.04 * out_t;
+                        unsafe { self.ctx.SetTransform(&self.transform_at(s_out, f.cx, py, 0.0, 0.0)) };
+                        self.draw_collapsed_item(&prev.as_ref(), f, a_out)?;
+                    }
+                    let a_in = a * in_t;
+                    if a_in > 0.01 {
+                        let s_in = 0.96 + 0.04 * in_t;
+                        unsafe { self.ctx.SetTransform(&self.transform_at(s_in, f.cx, py, 0.0, 0.0)) };
+                        self.draw_collapsed_item(&f.collapsed, f, a_in)?;
+                    }
+                    Ok(())
+                });
+            }
+        }
+        if a < 0.999 {
+            let s = 0.96 + 0.04 * a;
+            unsafe { self.ctx.SetTransform(&self.transform_at(s, f.cx, py, 0.0, 0.0)) };
+            let res = self.draw_collapsed_item(&f.collapsed, f, a);
+            unsafe { self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy)) };
+            res
+        } else {
+            self.draw_collapsed_item(&f.collapsed, f, a)
+        }
+    }
+
+    fn draw_collapsed_item(&self, item: &Collapsed, f: &Frame, a: f32) -> Result<()> {
         let h = f.shape_h;
         let left = f.cx - f.shape_w / 2.0;
         let right = f.cx + f.shape_w / 2.0;
         let white = self.brush(1.0, 1.0, 1.0, 0.92 * a)?;
-        match &f.collapsed {
+        match item {
             Collapsed::Minimal => {}
             Collapsed::Clock(t) => self.text(t, &self.fonts.small, R::new(left, 0.0, right, h), &white),
             Collapsed::Mascot { time, eyes, pet } => {
@@ -581,58 +882,165 @@ impl Renderer {
                 let r = R::new(left + 16.0, 0.0, right - 16.0, h);
                 self.text(line, &self.fonts.pill_lyric, r, &white);
             }
+            Collapsed::LyricRoll { cur, next, frac } => {
+                let clip_r = R::new(left + 14.0, 0.0, right - 14.0, h);
+                let t = clamp01(*frac);
+                let dy = t * h;
+                unsafe {
+                    self.ctx.PushAxisAlignedClip(&d2r(clip_r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                }
+                let res = (|| -> Result<()> {
+                    let b_cur = self.brush(1.0, 1.0, 1.0, 0.92 * a * (1.0 - t * 0.85))?;
+                    self.text(cur, &self.fonts.pill_lyric, R::new(left + 16.0, -dy, right - 16.0, h - dy), &b_cur);
+                    if !next.is_empty() && t > 0.01 {
+                        let b_next = self.brush(1.0, 1.0, 1.0, 0.92 * a * (0.15 + 0.85 * t))?;
+                        self.text(
+                            next,
+                            &self.fonts.pill_lyric,
+                            R::new(left + 16.0, h - dy, right - 16.0, 2.0 * h - dy),
+                            &b_next,
+                        );
+                    }
+                    Ok(())
+                })();
+                unsafe {
+                    self.ctx.PopAxisAlignedClip();
+                }
+                res?;
+            }
+            Collapsed::Charger { charging, pct, ring } => {
+                let col = if *charging { (0.26, 0.90, 0.48) } else { (1.0, 0.72, 0.25) };
+                let rcx = left + 26.0;
+                let rcy = h / 2.0;
+                let rad = (h * 0.30).clamp(7.0, 10.0);
+                let track_br = self.brush(1.0, 1.0, 1.0, 0.20 * a)?;
+                let ring_br = self.brush(col.0, col.1, col.2, 0.96 * a)?;
+                let style = self.round_stroke()?;
+                let ell = D2D1_ELLIPSE { point: pt(rcx, rcy), radiusX: rad, radiusY: rad };
+                unsafe {
+                    self.ctx.DrawEllipse(&ell, &track_br, 2.4, None);
+                }
+                let frac = clamp01(*ring);
+                if frac >= 0.995 {
+                    unsafe {
+                        self.ctx.DrawEllipse(&ell, &ring_br, 2.4, &style);
+                    }
+                } else if frac > 0.005 {
+                    let theta = frac * std::f32::consts::TAU;
+                    let ang_end = theta - std::f32::consts::FRAC_PI_2;
+                    let end_pt = pt(rcx + rad * ang_end.cos(), rcy + rad * ang_end.sin());
+                    unsafe {
+                        let g = self.d2d_factory.CreatePathGeometry()?;
+                        let s = g.Open()?;
+                        s.BeginFigure(pt(rcx, rcy - rad), D2D1_FIGURE_BEGIN_HOLLOW);
+                        if frac <= 0.5 {
+                            s.AddArc(&arc_cw(end_pt, rad));
+                        } else {
+                            s.AddArc(&arc_cw(pt(rcx, rcy + rad), rad));
+                            s.AddArc(&arc_cw(end_pt, rad));
+                        }
+                        s.EndFigure(D2D1_FIGURE_END_OPEN);
+                        s.Close()?;
+                        self.ctx.DrawGeometry(&g, &ring_br, 2.4, &style);
+                    }
+                }
+                // Mini rayo vectorial dentro del anillo al conectar, o punto central en batería.
+                if *charging {
+                    unsafe {
+                        let bolt = self.d2d_factory.CreatePathGeometry()?;
+                        let s = bolt.Open()?;
+                        s.BeginFigure(pt(rcx + 0.8, rcy - 3.6), D2D1_FIGURE_BEGIN_HOLLOW);
+                        s.AddLine(pt(rcx - 2.0, rcy + 0.2));
+                        s.AddLine(pt(rcx + 1.8, rcy + 0.2));
+                        s.AddLine(pt(rcx - 0.8, rcy + 3.6));
+                        s.EndFigure(D2D1_FIGURE_END_OPEN);
+                        s.Close()?;
+                        self.ctx.DrawGeometry(&bolt, &ring_br, 1.35, &style);
+                    }
+                } else {
+                    let dot = D2D1_ELLIPSE { point: pt(rcx, rcy), radiusX: 2.2, radiusY: 2.2 };
+                    unsafe { self.ctx.FillEllipse(&dot, &ring_br) };
+                }
+                let status = if *charging { "Cargando" } else { "Con batería" };
+                let label_br = self.brush(1.0, 1.0, 1.0, 0.86 * a)?;
+                self.text(status, &self.fonts.small, R::new(left + 42.0, 0.0, right - 54.0, h), &label_br);
+                let pct_txt = format!("{}%", pct.round().clamp(0.0, 100.0) as i32);
+                self.text(&pct_txt, &self.fonts.small, R::new(right - 56.0, 0.0, right - 12.0, h), &ring_br);
+            }
         }
         Ok(())
     }
 
-    fn draw_expanded(&self, f: &Frame, a: f32) -> Result<()> {
-        let rise = (1.0 - a) * 8.0;
-        unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy - rise));
+    fn draw_expanded(&self, f: &Frame, geo: &ID2D1PathGeometry1, a: f32) -> Result<()> {
+        let pm = clamp01(f.page_morph);
+        let morphing = pm < 0.999;
+        if !f.transparent && (morphing || a < 0.999) {
+            let bounds = rect(f.cx - f.shape_w / 2.0 - f.ear - 2.0, -2.0, f.cx + f.shape_w / 2.0 + f.ear + 2.0, f.shape_h + 2.0);
+            self.with_geo_mask(geo, bounds, || self.draw_expanded_body(f, a, pm, morphing))
+        } else {
+            let res = self.draw_expanded_body(f, a, pm, morphing);
+            unsafe {
+                self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy));
+            }
+            res
         }
+    }
+
+    fn draw_expanded_body(&self, f: &Frame, a: f32, pm: f32, morphing: bool) -> Result<()> {
+        let rise = (1.0 - a) * 8.0;
+        let s_open = 0.96 + 0.04 * a;
         let sh = f.transparent;
         let l = &f.layout;
+
+        // Cabecera (Reloj o Multimedia) + botones de la barra superior.
+        let pure_hdr_morph = morphing && f.page_dir == 0.0 && f.prev_sub.is_none();
+        let a_hdr = if pure_hdr_morph { a * pm } else { a };
+        let s_hdr = s_open * if pure_hdr_morph { 0.96 + 0.04 * pm } else { 1.0 };
+        unsafe {
+            self.ctx.SetTransform(&self.transform_at(s_hdr, f.cx, l.area.cy(), 0.0, -rise));
+        }
         match &f.expanded {
             Expanded::Clock { time, date } => {
-                self.label(time, &self.fonts.big, l.clock, (1.0, 1.0, 1.0, a), sh)?;
-                self.label(date, &self.fonts.date, l.date, (1.0, 1.0, 1.0, 0.65 * a), sh)?;
+                self.label(time, &self.fonts.big, l.clock, (1.0, 1.0, 1.0, a_hdr), sh)?;
+                self.label(date, &self.fonts.date, l.date, (1.0, 1.0, 1.0, 0.65 * a_hdr), sh)?;
             }
             Expanded::Media(m) => {
                 if self.art.is_some() {
                     if sh {
-                        let shadow = self.brush(0.0, 0.0, 0.0, 0.35 * a)?;
+                        let shadow = self.brush(0.0, 0.0, 0.0, 0.35 * a_hdr)?;
                         let rr = D2D1_ROUNDED_RECT { rect: d2r(l.art.inflate(1.5)), radiusX: 11.0, radiusY: 11.0 };
                         unsafe { self.ctx.FillRoundedRectangle(&rr, &shadow) };
                     }
-                    self.draw_art(l.art, 10.0, a)?;
+                    self.draw_art(l.art, 10.0, a_hdr)?;
                 } else {
-                    let bg = self.brush(1.0, 1.0, 1.0, 0.12 * a)?;
+                    let bg = self.brush(1.0, 1.0, 1.0, 0.12 * a_hdr)?;
                     let rr = D2D1_ROUNDED_RECT { rect: d2r(l.art), radiusX: 10.0, radiusY: 10.0 };
                     unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
-                    self.label(G_MUSIC, &self.fonts.icon_big, l.art, (1.0, 1.0, 1.0, 0.6 * a), false)?;
+                    self.label(G_MUSIC, &self.fonts.icon_big, l.art, (1.0, 1.0, 1.0, 0.6 * a_hdr), false)?;
                 }
                 let title = if m.title.is_empty() { "Reproduciendo" } else { m.title };
-                self.label(title, &self.fonts.title, l.title, (1.0, 1.0, 1.0, a), sh)?;
-                self.label(m.artist, &self.fonts.artist, l.artist, (1.0, 1.0, 1.0, 0.62 * a), sh)?;
+                self.label(title, &self.fonts.title, l.title, (1.0, 1.0, 1.0, a_hdr), sh)?;
+                self.label(m.artist, &self.fonts.artist, l.artist, (1.0, 1.0, 1.0, 0.62 * a_hdr), sh)?;
 
                 let hv = |b: Btn| f.hover == Some(b);
-                self.button(G_PREV, &self.fonts.icon, l.prev, a * if m.can_prev { 1.0 } else { 0.35 }, hv(Btn::Prev), sh)?;
-                self.button(if m.playing { G_PAUSE } else { G_PLAY }, &self.fonts.icon_big, l.play, a, hv(Btn::Play), sh)?;
-                self.button(G_NEXT, &self.fonts.icon, l.next, a * if m.can_next { 1.0 } else { 0.35 }, hv(Btn::Next), sh)?;
+                let bs = |b: Btn| btn_scale_for(f.pressed, b);
+                self.button(G_PREV, &self.fonts.icon, l.prev, a_hdr * if m.can_prev { 1.0 } else { 0.35 }, hv(Btn::Prev), sh, bs(Btn::Prev))?;
+                self.button(if m.playing { G_PAUSE } else { G_PLAY }, &self.fonts.icon_big, l.play, a_hdr, hv(Btn::Play), sh, bs(Btn::Play))?;
+                self.button(G_NEXT, &self.fonts.icon, l.next, a_hdr * if m.can_next { 1.0 } else { 0.35 }, hv(Btn::Next), sh, bs(Btn::Next))?;
                 let on = m.lyrics.is_some();
-                self.button(G_LYRICS, &self.fonts.icon, l.lyrics_btn, a * if on { 1.0 } else { 0.7 }, hv(Btn::Lyrics) || on, sh)?;
+                self.button(G_LYRICS, &self.fonts.icon, l.lyrics_btn, a_hdr * if on { 1.0 } else { 0.7 }, hv(Btn::Lyrics) || on, sh, bs(Btn::Lyrics))?;
 
                 if let Some(p) = m.progress {
-                    self.label(&m.pos, &self.fonts.time, l.t_left, (1.0, 1.0, 1.0, 0.6 * a), sh)?;
-                    self.label(&m.dur, &self.fonts.time, l.t_right, (1.0, 1.0, 1.0, 0.6 * a), sh)?;
+                    self.label(&m.pos, &self.fonts.time, l.t_left, (1.0, 1.0, 1.0, 0.6 * a_hdr), sh)?;
+                    self.label(&m.dur, &self.fonts.time, l.t_right, (1.0, 1.0, 1.0, 0.6 * a_hdr), sh)?;
                     let t = l.track;
                     if sh {
-                        let s = self.brush(0.0, 0.0, 0.0, 0.4 * a)?;
+                        let s = self.brush(0.0, 0.0, 0.0, 0.4 * a_hdr)?;
                         let rr = D2D1_ROUNDED_RECT { rect: d2r(t.inflate(1.0)), radiusX: 3.0, radiusY: 3.0 };
                         unsafe { self.ctx.FillRoundedRectangle(&rr, &s) };
                     }
-                    let bg = self.brush(1.0, 1.0, 1.0, 0.25 * a)?;
-                    let fg = self.brush(f.accent.0, f.accent.1, f.accent.2, 0.92 * a)?;
+                    let bg = self.brush(1.0, 1.0, 1.0, 0.25 * a_hdr)?;
+                    let fg = self.brush(f.accent.0, f.accent.1, f.accent.2, 0.92 * a_hdr)?;
                     let full = D2D1_ROUNDED_RECT { rect: d2r(t), radiusX: 2.0, radiusY: 2.0 };
                     let x = t.l + (t.r - t.l) * p.clamp(0.0, 1.0);
                     let done = D2D1_ROUNDED_RECT { rect: rect(t.l, t.t, x.max(t.l + 4.0), t.b), radiusX: 2.0, radiusY: 2.0 };
@@ -645,71 +1053,118 @@ impl Renderer {
                         }
                     }
                 }
-                if let Some(ly) = &m.lyrics {
-                    let ap = self.stagger(a, rise);
-                    self.draw_lyrics(ly, l.lyrics, ap, sh, f.hover)?;
-                    self.unstagger(rise);
+            }
+        }
+        let bs = |b: Btn| btn_scale_for(f.pressed, b);
+        let on = f.clip.is_some();
+        self.button(G_CLIP, &self.fonts.icon, l.clip_btn, a_hdr * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Clip) || on, sh, bs(Btn::Clip))?;
+        let on = f.shelf.is_some();
+        self.button(G_SHELF, &self.fonts.icon, l.shelf_btn, a_hdr * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Shelf) || on, sh, bs(Btn::Shelf))?;
+        let on = f.today.is_some();
+        self.button(G_TODAY, &self.fonts.icon, l.today_btn, a_hdr * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Today) || on, sh, bs(Btn::Today))?;
+        let on = f.ask.is_some();
+        self.button(G_ASK, &self.fonts.icon, l.ask_btn, a_hdr * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Ask) || on, sh, bs(Btn::Ask))?;
+        if l.mixer_btn.r > l.mixer_btn.l {
+            let on = f.mixer.is_some();
+            self.button(G_VOLUME, &self.fonts.icon, l.mixer_btn, a_hdr * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Mixer) || on, sh, bs(Btn::Mixer))?;
+        }
+
+        // Subpanel saliente (morph escala 1.0 → 0.96 + fundido + salida lateral de 24 px).
+        let slide = 24.0;
+        if morphing {
+            if let Some((pl, prev)) = &f.prev_sub {
+                let out_t = clamp01(pm * 1.45);
+                let a_out = a * (1.0 - out_t);
+                if a_out > 0.01 {
+                    let s_out = s_open * (1.0 - 0.04 * out_t);
+                    let dx_out = -f.page_dir * slide * out_t;
+                    unsafe {
+                        self.ctx.SetTransform(&self.transform_at(s_out, f.cx, pl.area.cy(), dx_out, -rise));
+                    }
+                    self.draw_prev_sub(prev, pl, f.accent, a_out, sh)?;
                 }
             }
         }
-        let on = f.clip.is_some();
-        self.button(G_CLIP, &self.fonts.icon, l.clip_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Clip) || on, sh)?;
-        if let Some(cv) = &f.clip {
-            let ap = self.stagger(a, rise);
-            self.draw_clip(cv, l.clip, ap, sh, f.hover)?;
-            self.unstagger(rise);
+
+        // Subpanel entrante / activo (morph escala 0.96 → 1.0 + fundido + entrada lateral de 24 px).
+        let ap = clamp01((a - 0.35) / 0.65);
+        let in_t = if morphing { clamp01((pm - 0.12) / 0.88) } else { 1.0 };
+        let a_in = ap * in_t;
+        if a_in > 0.01 {
+            let s_in = s_open * if morphing { 0.96 + 0.04 * in_t } else { 1.0 };
+            let dx_in = if morphing { f.page_dir * slide * (1.0 - pm) } else { 0.0 };
+            let dy_in = -rise + (1.0 - ap) * 10.0;
+            unsafe {
+                self.ctx.SetTransform(&self.transform_at(s_in, f.cx, l.area.cy(), dx_in, dy_in));
+            }
+            if let Expanded::Media(m) = &f.expanded {
+                if let Some(ly) = &m.lyrics {
+                    self.draw_lyrics(ly, l.lyrics, a_in, sh, f.hover)?;
+                }
+            }
+            if let Some(cv) = &f.clip {
+                self.draw_clip(cv, l.clip, a_in, sh, f.hover, f.pressed)?;
+            }
+            if let Some(sv) = &f.shelf {
+                self.draw_shelf(sv, l, f.accent, a_in, sh, f.hover, f.pressed)?;
+            }
+            if let Some(tv) = &f.today {
+                self.draw_today(tv, l, f.accent, a_in, sh, f.hover, f.pressed)?;
+            }
+            if let Some(av) = &f.ask {
+                self.draw_ask(av, l, f.accent, a_in, sh, f.hover, f.pressed)?;
+            }
+            if let Some(mv) = &f.mixer {
+                self.draw_mixer(mv, l, f.accent, a_in, sh, f.hover, f.pressed)?;
+            }
         }
-        let on = f.shelf.is_some();
-        self.button(G_SHELF, &self.fonts.icon, l.shelf_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Shelf) || on, sh)?;
-        if let Some(sv) = &f.shelf {
-            let ap = self.stagger(a, rise);
-            self.draw_shelf(sv, l, ap, sh, f.hover)?;
-            self.unstagger(rise);
-        }
-        let on = f.today.is_some();
-        self.button(G_TODAY, &self.fonts.icon, l.today_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Today) || on, sh)?;
-        if let Some(tv) = &f.today {
-            let ap = self.stagger(a, rise);
-            self.draw_today(tv, l, f.accent, ap, sh, f.hover)?;
-            self.unstagger(rise);
-        }
-        let on = f.ask.is_some();
-        self.button(G_ASK, &self.fonts.icon, l.ask_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Ask) || on, sh)?;
-        if let Some(av) = &f.ask {
-            let ap = self.stagger(a, rise);
-            self.draw_ask(av, l, f.accent, ap, sh, f.hover)?;
-            self.unstagger(rise);
-        }
-        if l.mixer_btn.r > l.mixer_btn.l {
-            let on = f.mixer.is_some();
-            self.button(G_VOLUME, &self.fonts.icon, l.mixer_btn, a * if on { 1.0 } else { 0.7 }, f.hover == Some(Btn::Mixer) || on, sh)?;
-        }
-        if let Some(mv) = &f.mixer {
-            let ap = self.stagger(a, rise);
-            self.draw_mixer(mv, l, f.accent, ap, sh, f.hover)?;
-            self.unstagger(rise);
-        }
-        self.draw_page_dots(l, f.active_page, f.accent, a, sh, f.hover)?;
+
+        // Puntitos indicadores de página fijos al pie del panel.
         unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy));
+            self.ctx.SetTransform(&self.transform_at(s_open, f.cx, l.area.cy(), 0.0, -rise));
         }
+        self.draw_page_dots(l, f.active_page, f.accent, a, sh, f.hover, f.pressed)?;
         Ok(())
     }
 
+    fn draw_prev_sub(&self, prev: &PrevSub, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool) -> Result<()> {
+        match prev {
+            PrevSub::Ask(av) => self.draw_ask(av, l, accent, a, sh, None, None),
+            PrevSub::Today(tv) => self.draw_today(tv, l, accent, a, sh, None, None),
+            PrevSub::Shelf(sv) => self.draw_shelf(sv, l, accent, a, sh, None, None),
+            PrevSub::Clip(cv) => self.draw_clip(cv, l.clip, a, sh, None, None),
+            PrevSub::Mixer(mv) => self.draw_mixer(mv, l, accent, a, sh, None, None),
+            PrevSub::Lyrics(ly) => self.draw_lyrics(ly, l.lyrics, a, sh, None),
+        }
+    }
+
     /// Panel Ask Esme (Fase 6): chip de modo (Tab), acciones de portapapeles, input Direct2D con cursor y respuesta.
-    fn draw_ask(&self, av: &AskView, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_ask(
+        &self,
+        av: &AskView,
+        l: &Layout,
+        accent: (f32, f32, f32),
+        a: f32,
+        sh: bool,
+        hover: Option<Btn>,
+        pressed: Option<(Btn, f32)>,
+    ) -> Result<()> {
         let hv = |b: Btn| hover == Some(b);
 
         // 1. Chip de Modo (Preguntar / Traducir).
         let mode_c = if av.is_translate { BLUE } else { accent };
-        let mode_bg = self.brush(mode_c.0, mode_c.1, mode_c.2, (if hv(Btn::AskMode) { 0.32 } else { 0.20 }) * a)?;
-        let mode_border = self.brush(mode_c.0, mode_c.1, mode_c.2, 0.75 * a)?;
-        let mode_rr = D2D1_ROUNDED_RECT { rect: d2r(l.ask_mode), radiusX: 8.0, radiusY: 8.0 };
-        unsafe {
-            self.ctx.FillRoundedRectangle(&mode_rr, &mode_bg);
-            self.ctx.DrawRoundedRectangle(&mode_rr, &mode_border, 1.0, None);
-        }
-        self.label(av.mode_label, &self.fonts.time, l.ask_mode, (1.0, 1.0, 1.0, 0.95 * a), sh)?;
+        let ms = btn_scale_for(pressed, Btn::AskMode);
+        self.with_local_scale(ms, l.ask_mode.cx(), l.ask_mode.cy(), || {
+            let mode_bg = self.brush(mode_c.0, mode_c.1, mode_c.2, (if hv(Btn::AskMode) { 0.32 } else { 0.20 }) * a)?;
+            let mode_border = self.brush(mode_c.0, mode_c.1, mode_c.2, 0.75 * a)?;
+            let mode_rr = D2D1_ROUNDED_RECT { rect: d2r(l.ask_mode), radiusX: 8.0, radiusY: 8.0 };
+            unsafe {
+                self.ctx.FillRoundedRectangle(&mode_rr, &mode_bg);
+                self.ctx.DrawRoundedRectangle(&mode_rr, &mode_border, 1.0, None);
+            }
+            self.label(av.mode_label, &self.fonts.time, l.ask_mode, (1.0, 1.0, 1.0, 0.95 * a), sh)
+        })?;
         if let Some((eyes, pet)) = av.pet {
             let ex = (l.ask_mode.r + l.ask_summarize.l) / 2.0;
             if l.ask_summarize.l - l.ask_mode.r > 40.0 {
@@ -723,11 +1178,14 @@ impl Renderer {
             (l.ask_summarize, Btn::AskSummarize, "✨ Resumir clip"),
             (l.ask_spellcheck, Btn::AskSpellcheck, "✎ Corregir"),
         ] {
-            let bg_a = if hv(btn_id) && av.has_clip { 0.22 } else { 0.10 };
-            let bg = self.brush(1.0, 1.0, 1.0, bg_a * a)?;
-            let rr = D2D1_ROUNDED_RECT { rect: d2r(rect_btn), radiusX: 7.0, radiusY: 7.0 };
-            unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
-            self.label(txt, &self.fonts.time, rect_btn, (1.0, 1.0, 1.0, clip_alpha * a), sh)?;
+            let s = btn_scale_for(pressed, btn_id);
+            self.with_local_scale(s, rect_btn.cx(), rect_btn.cy(), || {
+                let bg_a = if hv(btn_id) && av.has_clip { 0.22 } else { 0.10 };
+                let bg = self.brush(1.0, 1.0, 1.0, bg_a * a)?;
+                let rr = D2D1_ROUNDED_RECT { rect: d2r(rect_btn), radiusX: 7.0, radiusY: 7.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+                self.label(txt, &self.fonts.time, rect_btn, (1.0, 1.0, 1.0, clip_alpha * a), sh)
+            })?;
         }
 
         // 3. Cuadro de texto nativo en Direct2D.
@@ -802,15 +1260,18 @@ impl Renderer {
 
                 // Botón de copiar respuesta.
                 let cp = l.ask_copy;
-                let cp_bg = self.brush(1.0, 1.0, 1.0, (if hv(Btn::AskCopy) { 0.24 } else { 0.12 }) * a)?;
-                let cp_rr = D2D1_ROUNDED_RECT { rect: d2r(cp), radiusX: 6.0, radiusY: 6.0 };
-                unsafe { self.ctx.FillRoundedRectangle(&cp_rr, &cp_bg) };
-                let (cp_txt, cp_col) = if av.copied {
-                    ("✓ Copiado", (0.55, 0.92, 0.62, a))
-                } else {
-                    ("📋 Copiar", (1.0, 1.0, 1.0, 0.85 * a))
-                };
-                self.label(cp_txt, &self.fonts.time, cp, cp_col, sh)?;
+                let cps = btn_scale_for(pressed, Btn::AskCopy);
+                self.with_local_scale(cps, cp.cx(), cp.cy(), || {
+                    let cp_bg = self.brush(1.0, 1.0, 1.0, (if hv(Btn::AskCopy) { 0.24 } else { 0.12 }) * a)?;
+                    let cp_rr = D2D1_ROUNDED_RECT { rect: d2r(cp), radiusX: 6.0, radiusY: 6.0 };
+                    unsafe { self.ctx.FillRoundedRectangle(&cp_rr, &cp_bg) };
+                    let (cp_txt, cp_col) = if av.copied {
+                        ("✓ Copiado", (0.55, 0.92, 0.62, a))
+                    } else {
+                        ("📋 Copiar", (1.0, 1.0, 1.0, 0.85 * a))
+                    };
+                    self.label(cp_txt, &self.fonts.time, cp, cp_col, sh)
+                })?;
             }
         }
         Ok(())
@@ -866,10 +1327,21 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_today(&self, tv: &TodayView, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_today(
+        &self,
+        tv: &TodayView,
+        l: &Layout,
+        accent: (f32, f32, f32),
+        a: f32,
+        sh: bool,
+        hover: Option<Btn>,
+        pressed: Option<(Btn, f32)>,
+    ) -> Result<()> {
         let dim = (1.0, 1.0, 1.0, 0.6 * a);
         let white = (1.0, 1.0, 1.0, a);
         let hv = |b: Btn| hover == Some(b);
+        let bs = |b: Btn| btn_scale_for(pressed, b);
         let left = |row: R, w: f32| R::new(row.l + 4.0, row.t, row.l + 4.0 + w, row.b);
         let shown = |row: R| row.l > -1000.0;
         if ![l.pomo_row, l.water_row, l.weather_row, l.cal_row, l.todo_row].iter().any(|r| shown(*r)) {
@@ -880,25 +1352,106 @@ impl Renderer {
         // Pomodoro.
         let p = l.pomo_row;
         if shown(p) {
-        self.label(tv.pomo_label, &self.fonts.artist, R::new(p.l + 4.0, p.t, l.pomo_toggle.l - 8.0, p.t + 18.0), dim, sh)?;
-        self.label(&tv.pomo_time, &self.fonts.title, R::new(p.l + 4.0, p.t + 16.0, p.l + 90.0, p.b), white, sh)?;
-        let by = p.t + 26.0;
-        self.bar(R::new(p.l + 96.0, by - 2.0, l.pomo_toggle.l - 12.0, by + 2.0), tv.pomo_progress, (1.0, 0.45, 0.35), a)?;
-        self.button(if tv.pomo_running { G_PAUSE } else { G_PLAY }, &self.fonts.icon, l.pomo_toggle, a, hv(Btn::PomoToggle), sh)?;
-        self.button("\u{E72C}", &self.fonts.icon, l.pomo_reset, a * 0.8, hv(Btn::PomoReset), sh)?;
+            self.label(tv.pomo_label, &self.fonts.artist, R::new(p.l + 4.0, p.t, l.pomo_toggle.l - 8.0, p.t + 18.0), dim, sh)?;
+            self.label(&tv.pomo_time, &self.fonts.title, R::new(p.l + 4.0, p.t + 16.0, p.l + 90.0, p.b), white, sh)?;
+            let by = p.t + 26.0;
+            self.bar(R::new(p.l + 96.0, by - 2.0, l.pomo_toggle.l - 12.0, by + 2.0), tv.pomo_progress, (1.0, 0.45, 0.35), a)?;
+            self.button(if tv.pomo_running { G_PAUSE } else { G_PLAY }, &self.fonts.icon, l.pomo_toggle, a, hv(Btn::PomoToggle), sh, bs(Btn::PomoToggle))?;
+            self.button("\u{E72C}", &self.fonts.icon, l.pomo_reset, a * 0.8, hv(Btn::PomoReset), sh, bs(Btn::PomoReset))?;
         }
 
-        // Agua.
+        // Agua: número que se desliza al sumar/restar + 24 barritas por hora que crecen escalonadas.
         let w = l.water_row;
         if shown(w) {
-        self.label("Agua", &self.fonts.artist, R::new(w.l + 4.0, w.t, l.water_sub.l - 8.0, w.t + 18.0), dim, sh)?;
-        let txt = format!("{} / {} vasos", tv.water, tv.goal);
-        self.label(&txt, &self.fonts.artist, R::new(w.l + 4.0, w.t + 16.0, w.l + 120.0, w.b), white, sh)?;
-        let v = tv.water as f32 / tv.goal.max(1) as f32;
-        let by = w.t + 26.0;
-        self.bar(R::new(w.l + 124.0, by - 2.0, l.water_sub.l - 12.0, by + 2.0), v, (0.35, 0.65, 1.0), a)?;
-        self.button("\u{E738}", &self.fonts.icon, l.water_sub, a * 0.8, hv(Btn::WaterSub), sh)?;
-        self.button("\u{E710}", &self.fonts.icon, l.water_add, a, hv(Btn::WaterAdd), sh)?;
+            self.label("Agua", &self.fonts.artist, R::new(w.l + 4.0, w.t, w.l + 114.0, w.t + 16.0), dim, sh)?;
+            let cur_s = tv.water.to_string();
+            let prev_s = tv.water_prev.to_string();
+            let num_w = self
+                .measure_text_width(&cur_s, &self.fonts.artist, 36.0)
+                .max(self.measure_text_width(&prev_s, &self.fonts.artist, 36.0))
+                .max(10.0)
+                + 2.0;
+            let num_r = R::new(w.l + 4.0, w.t + 16.0, w.l + 4.0 + num_w, w.b);
+            let nt = clamp01(tv.water_num_t);
+            if nt < 0.999 && tv.water_prev != tv.water {
+                let nh = (num_r.b - num_r.t).max(12.0);
+                let dir = if tv.water_dir >= 0.0 { 1.0 } else { -1.0 };
+                let old_dy = -dir * nh * nt;
+                let new_dy = dir * nh * (1.0 - nt);
+                unsafe {
+                    self.ctx.PushAxisAlignedClip(&d2r(num_r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                }
+                let res = (|| -> Result<()> {
+                    self.label(
+                        &prev_s,
+                        &self.fonts.artist,
+                        R::new(num_r.l, num_r.t + old_dy, num_r.r, num_r.b + old_dy),
+                        (1.0, 1.0, 1.0, a * (1.0 - nt)),
+                        sh,
+                    )?;
+                    self.label(
+                        &cur_s,
+                        &self.fonts.artist,
+                        R::new(num_r.l, num_r.t + new_dy, num_r.r, num_r.b + new_dy),
+                        (1.0, 1.0, 1.0, a * nt),
+                        sh,
+                    )
+                })();
+                unsafe {
+                    self.ctx.PopAxisAlignedClip();
+                }
+                res?;
+            } else {
+                self.label(&cur_s, &self.fonts.artist, num_r, white, sh)?;
+            }
+            let suffix = format!("/ {} vasos", tv.goal);
+            self.label(&suffix, &self.fonts.artist, R::new(num_r.r + 3.0, w.t + 16.0, w.l + 116.0, w.b), (1.0, 1.0, 1.0, 0.85 * a), sh)?;
+
+            // Gráfico de 24 barritas por hora (crecen escalonadas de abajo hacia arriba al abrir Hoy).
+            let chart_l = w.l + 118.0;
+            let chart_r = l.water_sub.l - 12.0;
+            if chart_r - chart_l >= 48.0 {
+                let base_y = w.b - 8.5;
+                let max_h = (base_y - (w.t + 3.5)).max(10.0);
+                let slot = (chart_r - chart_l) / 24.0;
+                let bw = (slot - 1.5).clamp(2.0, 6.5);
+                let max_v = tv.water_hours.iter().copied().max().unwrap_or(0).max(2) as f32;
+                let bars_t = clamp01(tv.water_bars_t);
+                let idle_br = self.brush(1.0, 1.0, 1.0, 0.14 * a)?;
+                let now_idle_br = self.brush(0.35, 0.72, 1.0, 0.30 * a)?;
+                let fill_br = self.brush(0.35, 0.72, 1.0, 0.72 * a)?;
+                let now_fill_br = self.brush(0.45, 0.80, 1.0, 0.98 * a)?;
+                for (h_idx, &cnt) in tv.water_hours.iter().enumerate() {
+                    let delay = (h_idx as f32 / 23.0) * 0.42;
+                    let prog = clamp01((bars_t - delay) / 0.58);
+                    if prog <= 0.005 {
+                        continue;
+                    }
+                    let x0 = chart_l + h_idx as f32 * slot + (slot - bw) * 0.5;
+                    let is_now = h_idx == tv.water_cur_hour;
+                    let (bh, br) = if cnt == 0 {
+                        (2.2 * prog, if is_now { &now_idle_br } else { &idle_br })
+                    } else {
+                        let frac = (cnt as f32 / max_v).clamp(0.20, 1.0);
+                        let bump = match tv.water_bump {
+                            Some((bh_idx, k)) if bh_idx == h_idx => k.clamp(0.6, 1.35),
+                            _ => 1.0,
+                        };
+                        let h_px = ((3.5 + (max_h - 3.5) * frac) * prog * bump).min(max_h + 2.0);
+                        (h_px, if is_now { &now_fill_br } else { &fill_br })
+                    };
+                    let rr = D2D1_ROUNDED_RECT {
+                        rect: rect(x0, base_y - bh, x0 + bw, base_y),
+                        radiusX: (bw * 0.5).min(1.5),
+                        radiusY: (bw * 0.5).min(1.5),
+                    };
+                    unsafe { self.ctx.FillRoundedRectangle(&rr, br) };
+                }
+                let v = tv.water as f32 / tv.goal.max(1) as f32;
+                self.bar(R::new(chart_l, w.b - 5.0, chart_r, w.b - 2.0), v, (0.35, 0.65, 1.0), a)?;
+            }
+            self.button("\u{E738}", &self.fonts.icon, l.water_sub, a * 0.8, hv(Btn::WaterSub), sh, bs(Btn::WaterSub))?;
+            self.button("\u{E710}", &self.fonts.icon, l.water_add, a, hv(Btn::WaterAdd), sh, bs(Btn::WaterAdd))?;
         }
 
         // Clima.
@@ -922,7 +1475,7 @@ impl Renderer {
             }
         }
 
-        // Tareas rápidas (To-Do).
+        // Tareas rápidas (To-Do): pop del círculo, tachado izq→der y contador deslizante.
         if shown(l.todo_row) {
             let inp = l.todo_input;
             let bg = self.brush(1.0, 1.0, 1.0, (if sh { 0.16 } else { 0.09 }) * a)?;
@@ -934,9 +1487,11 @@ impl Renderer {
                 self.ctx.FillRoundedRectangle(&rr, &bg);
                 self.ctx.DrawRoundedRectangle(&rr, &border, if tv.todo_focused { 1.3 } else { 1.0 }, None);
             }
+            let has_counter = tv.todo_total > 0;
+            let txt_right = if has_counter { inp.r - 48.0 } else { inp.r - 8.0 };
             let pad_x = inp.l + 8.0;
-            let max_w = (inp.r - inp.l - 16.0).max(20.0);
-            let txt_r = R::new(pad_x, inp.t, inp.r - 8.0, inp.b);
+            let max_w = (txt_right - pad_x).max(20.0);
+            let txt_r = R::new(pad_x, inp.t, txt_right, inp.b);
             if tv.todo_input.is_empty() {
                 self.label("Nueva tarea… (ej. 18:30 Llamar)", &self.fonts.artist, txt_r, (1.0, 1.0, 1.0, 0.42 * a), sh)?;
                 if tv.todo_focused && tv.todo_caret {
@@ -949,18 +1504,80 @@ impl Renderer {
                 let tw = self.measure_text_width(&display, &self.fonts.artist, max_w);
                 self.label(&display, &self.fonts.artist, txt_r, (1.0, 1.0, 1.0, 0.96 * a), sh)?;
                 if tv.todo_focused && tv.todo_caret {
-                    let cx = (pad_x + tw + 1.5).min(inp.r - 8.0);
+                    let cx = (pad_x + tw + 1.5).min(txt_right);
                     let caret = self.brush(accent.0, accent.1, accent.2, 0.95 * a)?;
                     let cr = rect(cx, inp.t + 5.0, cx + 1.5, inp.b - 5.0);
                     unsafe { self.ctx.FillRectangle(&cr, &caret) };
                 }
             }
 
+            // Contador deslizante `hechas/total` (ej. 3/5 → 4/5) en el extremo derecho del cuadro.
+            if has_counter {
+                let cnt_r = R::new(inp.r - 44.0, inp.t + 4.0, inp.r - 5.0, inp.b - 4.0);
+                let all_done = tv.todo_done == tv.todo_total;
+                let cbg = if all_done {
+                    self.brush(accent.0, accent.1, accent.2, 0.22 * a)?
+                } else {
+                    self.brush(1.0, 1.0, 1.0, 0.08 * a)?
+                };
+                let crr = D2D1_ROUNDED_RECT { rect: d2r(cnt_r), radiusX: 5.0, radiusY: 5.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&crr, &cbg) };
+
+                let done_s = tv.todo_done.to_string();
+                let prev_s = tv.todo_done_prev.to_string();
+                let tot_s = format!("/{}", tv.todo_total);
+                let done_w = self
+                    .measure_text_width(&done_s, &self.fonts.time, 20.0)
+                    .max(self.measure_text_width(&prev_s, &self.fonts.time, 20.0))
+                    .max(7.0);
+                let tot_w = self.measure_text_width(&tot_s, &self.fonts.time, 24.0).max(10.0);
+                let total_w = done_w + tot_w;
+                let sx = cnt_r.cx() - total_w * 0.5;
+                let done_r = R::new(sx, cnt_r.t, sx + done_w, cnt_r.b);
+                let tot_r = R::new(sx + done_w, cnt_r.t, sx + total_w + 1.0, cnt_r.b);
+                let ccol = if all_done { (accent.0, accent.1, accent.2, 0.96 * a) } else { (1.0, 1.0, 1.0, 0.85 * a) };
+                let ct = clamp01(tv.todo_count_t);
+                if ct < 0.999 && tv.todo_done_prev != tv.todo_done {
+                    let ch = (done_r.b - done_r.t).max(10.0);
+                    let dir = if tv.todo_count_dir >= 0.0 { 1.0 } else { -1.0 };
+                    let old_dy = -dir * ch * ct;
+                    let new_dy = dir * ch * (1.0 - ct);
+                    unsafe {
+                        self.ctx.PushAxisAlignedClip(&d2r(done_r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                    }
+                    let res = (|| -> Result<()> {
+                        self.label(
+                            &prev_s,
+                            &self.fonts.time,
+                            R::new(done_r.l, done_r.t + old_dy, done_r.r, done_r.b + old_dy),
+                            (ccol.0, ccol.1, ccol.2, ccol.3 * (1.0 - ct)),
+                            false,
+                        )?;
+                        self.label(
+                            &done_s,
+                            &self.fonts.time,
+                            R::new(done_r.l, done_r.t + new_dy, done_r.r, done_r.b + new_dy),
+                            (ccol.0, ccol.1, ccol.2, ccol.3 * ct),
+                            false,
+                        )
+                    })();
+                    unsafe {
+                        self.ctx.PopAxisAlignedClip();
+                    }
+                    res?;
+                } else {
+                    self.label(&done_s, &self.fonts.time, done_r, ccol, false)?;
+                }
+                self.label(&tot_s, &self.fonts.time, tot_r, (1.0, 1.0, 1.0, 0.55 * a), false)?;
+            }
+
             // Botón "+" para agregar.
-            let add_bg = self.brush(1.0, 1.0, 1.0, (if hv(Btn::TodoAdd) { 0.24 } else { 0.12 }) * a)?;
-            let add_rr = D2D1_ROUNDED_RECT { rect: d2r(l.todo_add), radiusX: 7.0, radiusY: 7.0 };
-            unsafe { self.ctx.FillRoundedRectangle(&add_rr, &add_bg) };
-            self.label("\u{E710}", &self.fonts.icon, l.todo_add, (1.0, 1.0, 1.0, 0.9 * a), sh)?;
+            self.with_local_scale(bs(Btn::TodoAdd), l.todo_add.cx(), l.todo_add.cy(), || {
+                let add_bg = self.brush(1.0, 1.0, 1.0, (if hv(Btn::TodoAdd) { 0.24 } else { 0.12 }) * a)?;
+                let add_rr = D2D1_ROUNDED_RECT { rect: d2r(l.todo_add), radiusX: 7.0, radiusY: 7.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&add_rr, &add_bg) };
+                self.label("\u{E710}", &self.fonts.icon, l.todo_add, (1.0, 1.0, 1.0, 0.9 * a), sh)
+            })?;
 
             // Lista de tareas.
             let list = l.todo_list;
@@ -968,6 +1585,8 @@ impl Renderer {
                 let empty_r = R::new(list.l + 2.0, list.t, list.r, list.t + ui::TODO_ROW_H);
                 self.label("Sin tareas · escribí arriba y apretá Enter", &self.fonts.artist, empty_r, dim, sh)?;
             } else {
+                let check_style = self.round_stroke()?;
+                let lum = 0.299 * accent.0 + 0.587 * accent.1 + 0.114 * accent.2;
                 for (i, item) in tv.todos.iter().enumerate() {
                     let y = list.t + i as f32 * ui::TODO_ROW_H;
                     let row = R::new(list.l, y, list.r, y + ui::TODO_ROW_H - 2.0);
@@ -989,18 +1608,79 @@ impl Renderer {
                         let due_col = if item.done { (1.0, 1.0, 1.0, 0.45 * a) } else { (dc.0, dc.1, dc.2, 0.95 * a) };
                         self.label(&item.due, &self.fonts.time, due_r, due_col, sh)?;
                     }
-                    let check_glyph = if item.done { "\u{E73A}" } else { "\u{E739}" };
-                    let check_col = if item.done { (accent.0, accent.1, accent.2, 0.9 * a) } else { dim };
-                    self.label(check_glyph, &self.fonts.icon, check_r, check_col, sh)?;
-                    let txt_col = if item.done { (1.0, 1.0, 1.0, 0.42 * a) } else { (1.0, 1.0, 1.0, 0.92 * a) };
-                    self.label(&item.text, &self.fonts.artist, R::new(row.l + 26.0, row.t, text_right, row.b), txt_col, sh)?;
-                    if hv(Btn::TodoDelete(i)) {
-                        let dbg = self.brush(1.0, 0.35, 0.35, 0.25 * a)?;
-                        let drr = D2D1_ROUNDED_RECT { rect: d2r(del_r), radiusX: 6.0, radiusY: 6.0 };
-                        unsafe { self.ctx.FillRoundedRectangle(&drr, &dbg) };
+
+                    // Círculo vectorial con relleno y "pop" elástico al marcar.
+                    let st = tv.todo_strikes.get(i).copied().unwrap_or(if item.done { 1.0 } else { 0.0 }).clamp(0.0, 1.0);
+                    let pop = match tv.todo_pop {
+                        Some((idx, sc)) if idx == i => sc,
+                        _ => 1.0,
+                    };
+                    let (ccx, ccy) = (check_r.cx(), check_r.cy());
+                    let cr = 6.5;
+                    self.with_local_scale(pop, ccx, ccy, || {
+                        let ring_c = (
+                            1.0 + (accent.0 - 1.0) * st,
+                            1.0 + (accent.1 - 1.0) * st,
+                            1.0 + (accent.2 - 1.0) * st,
+                        );
+                        let ring_br = self.brush(ring_c.0, ring_c.1, ring_c.2, (0.50 + 0.45 * st) * a)?;
+                        let ell = D2D1_ELLIPSE { point: pt(ccx, ccy), radiusX: cr, radiusY: cr };
+                        unsafe { self.ctx.DrawEllipse(&ell, &ring_br, 1.4, None) };
+                        if st > 0.02 {
+                            let fill_br = self.brush(accent.0, accent.1, accent.2, 0.95 * st * a)?;
+                            let fr = cr * st;
+                            let fill_ell = D2D1_ELLIPSE { point: pt(ccx, ccy), radiusX: fr, radiusY: fr };
+                            unsafe { self.ctx.FillEllipse(&fill_ell, &fill_br) };
+                        }
+                        if st > 0.25 {
+                            let ck = clamp01((st - 0.25) / 0.75);
+                            let ck_br = if lum > 0.5 {
+                                self.brush(0.05, 0.05, 0.07, ck * a)?
+                            } else {
+                                self.brush(1.0, 1.0, 1.0, ck * a)?
+                            };
+                            unsafe {
+                                let g = self.d2d_factory.CreatePathGeometry()?;
+                                let s = g.Open()?;
+                                s.BeginFigure(pt(ccx - 2.8, ccy + 0.2), D2D1_FIGURE_BEGIN_HOLLOW);
+                                s.AddLine(pt(ccx - 0.7, ccy + 2.4));
+                                s.AddLine(pt(ccx + 3.2, ccy - 2.2));
+                                s.EndFigure(D2D1_FIGURE_END_OPEN);
+                                s.Close()?;
+                                self.ctx.DrawGeometry(&g, &ck_br, 1.6, &check_style);
+                            }
+                        }
+                        Ok(())
+                    })?;
+
+                    let txt_r = R::new(row.l + 26.0, row.t, text_right, row.b);
+                    let txt_col = (1.0, 1.0, 1.0, (0.92 - 0.50 * st) * a);
+                    self.label(&item.text, &self.fonts.artist, txt_r, txt_col, sh)?;
+                    // Tachado progresivo de izquierda a derecha.
+                    if st > 0.01 {
+                        let max_tw = (text_right - txt_r.l).max(0.0);
+                        let tw = self.measure_text_width(&item.text, &self.fonts.artist, max_tw).min(max_tw);
+                        if tw > 1.0 {
+                            let sy = row.cy() + 0.5;
+                            let sbr = self.brush(1.0, 1.0, 1.0, 0.58 * st * a)?;
+                            let srr = D2D1_ROUNDED_RECT {
+                                rect: rect(txt_r.l, sy - 0.7, txt_r.l + tw * st, sy + 0.7),
+                                radiusX: 0.7,
+                                radiusY: 0.7,
+                            };
+                            unsafe { self.ctx.FillRoundedRectangle(&srr, &sbr) };
+                        }
                     }
-                    let del_col = if hv(Btn::TodoDelete(i)) { (1.0, 0.55, 0.55, a) } else { (1.0, 1.0, 1.0, 0.45 * a) };
-                    self.label("\u{E711}", &self.fonts.icon, del_r, del_col, sh)?;
+
+                    self.with_local_scale(bs(Btn::TodoDelete(i)), del_r.cx(), del_r.cy(), || {
+                        if hv(Btn::TodoDelete(i)) {
+                            let dbg = self.brush(1.0, 0.35, 0.35, 0.25 * a)?;
+                            let drr = D2D1_ROUNDED_RECT { rect: d2r(del_r), radiusX: 6.0, radiusY: 6.0 };
+                            unsafe { self.ctx.FillRoundedRectangle(&drr, &dbg) };
+                        }
+                        let del_col = if hv(Btn::TodoDelete(i)) { (1.0, 0.55, 0.55, a) } else { (1.0, 1.0, 1.0, 0.45 * a) };
+                        self.label("\u{E711}", &self.fonts.icon, del_r, del_col, sh)
+                    })?;
                 }
                 if tv.todo_total > ui::TODO_VISIBLE {
                     let track = R::new(list.r + 3.0, list.t + 2.0, list.r + 5.5, list.b - 2.0);
@@ -1023,7 +1703,17 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_shelf(&self, sv: &ShelfView, l: &Layout, a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_shelf(
+        &self,
+        sv: &ShelfView,
+        l: &Layout,
+        accent: (f32, f32, f32),
+        a: f32,
+        sh: bool,
+        hover: Option<Btn>,
+        pressed: Option<(Btn, f32)>,
+    ) -> Result<()> {
         let area = l.shelf;
         if !sv.tiles.is_empty() {
             let count_txt = if sv.tiles.len() == 1 {
@@ -1037,15 +1727,17 @@ impl Renderer {
             // Botón "Borrar todo".
             let clr = l.shelf_clear;
             let hv_clr = hover == Some(Btn::ShelfClear);
-            let bg = if hv_clr {
-                self.brush(1.0, 0.38, 0.38, 0.32 * a)?
-            } else {
-                self.brush(1.0, 1.0, 1.0, (if sh { 0.18 } else { 0.11 }) * a)?
-            };
-            let rr = D2D1_ROUNDED_RECT { rect: d2r(clr), radiusX: 7.0, radiusY: 7.0 };
-            unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
-            let txt_col = if hv_clr { (1.0, 0.72, 0.72, a) } else { (1.0, 1.0, 1.0, 0.85 * a) };
-            self.label("Borrar todo", &self.fonts.time, clr, txt_col, sh)?;
+            self.with_local_scale(btn_scale_for(pressed, Btn::ShelfClear), clr.cx(), clr.cy(), || {
+                let bg = if hv_clr {
+                    self.brush(1.0, 0.38, 0.38, 0.32 * a)?
+                } else {
+                    self.brush(1.0, 1.0, 1.0, (if sh { 0.18 } else { 0.11 }) * a)?
+                };
+                let rr = D2D1_ROUNDED_RECT { rect: d2r(clr), radiusX: 7.0, radiusY: 7.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+                let txt_col = if hv_clr { (1.0, 0.72, 0.72, a) } else { (1.0, 1.0, 1.0, 0.85 * a) };
+                self.label("Borrar todo", &self.fonts.time, clr, txt_col, sh)
+            })?;
         }
         if sv.tiles.is_empty() || sv.drop_hover {
             // Zona para soltar: borde punteado, ámbar cuando hay algo encima.
@@ -1072,18 +1764,35 @@ impl Renderer {
         let n = sv.tiles.len();
         for (i, (glyph, name)) in sv.tiles.iter().enumerate() {
             let t = l.shelf_tile(i, n);
-            if hover == Some(Btn::ShelfItem(i)) {
-                let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.2 } else { 0.1 } * a)?;
-                let rr = D2D1_ROUNDED_RECT { rect: d2r(t), radiusX: 10.0, radiusY: 10.0 };
-                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
-            }
-            self.label(glyph, &self.fonts.icon_big, R::new(t.l, t.t + 4.0, t.r, t.t + 38.0), (1.0, 1.0, 1.0, 0.9 * a), sh)?;
-            self.label(name, &self.fonts.tile, R::new(t.l + 3.0, t.t + 40.0, t.r - 3.0, t.b - 4.0), (1.0, 1.0, 1.0, 0.8 * a), sh)?;
+            let entering = i < sv.new_count && sv.enter < 0.999;
+            let ep = if entering { clamp01(sv.enter) } else { 1.0 };
+            let sc = (0.90 + 0.10 * ep) * btn_scale_for(pressed, Btn::ShelfItem(i));
+            let ta = a * (0.12 + 0.88 * ep);
+            self.with_local_scale(sc, t.cx(), t.cy(), || {
+                if entering {
+                    let halo = self.brush(accent.0, accent.1, accent.2, 0.22 * (1.0 - ep) * a)?;
+                    let hrr = D2D1_ROUNDED_RECT { rect: d2r(t.inflate(2.5 * (1.0 - ep))), radiusX: 12.0, radiusY: 12.0 };
+                    let rim = self.brush(accent.0, accent.1, accent.2, 0.55 * (1.0 - ep) * a)?;
+                    let trr = D2D1_ROUNDED_RECT { rect: d2r(t), radiusX: 10.0, radiusY: 10.0 };
+                    unsafe {
+                        self.ctx.FillRoundedRectangle(&hrr, &halo);
+                        self.ctx.DrawRoundedRectangle(&trr, &rim, 1.2, None);
+                    }
+                }
+                if hover == Some(Btn::ShelfItem(i)) {
+                    let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.2 } else { 0.1 } * ta)?;
+                    let rr = D2D1_ROUNDED_RECT { rect: d2r(t), radiusX: 10.0, radiusY: 10.0 };
+                    unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+                }
+                self.label(glyph, &self.fonts.icon_big, R::new(t.l, t.t + 4.0, t.r, t.t + 38.0), (1.0, 1.0, 1.0, 0.9 * ta), sh)?;
+                self.label(name, &self.fonts.tile, R::new(t.l + 3.0, t.t + 40.0, t.r - 3.0, t.b - 4.0), (1.0, 1.0, 1.0, 0.8 * ta), sh)
+            })?;
         }
         Ok(())
     }
 
     /// Puntitos indicadores de página al pie del panel expandido.
+    #[allow(clippy::too_many_arguments)]
     fn draw_page_dots(
         &self,
         l: &Layout,
@@ -1092,28 +1801,42 @@ impl Renderer {
         a: f32,
         sh: bool,
         hover: Option<Btn>,
+        pressed: Option<(Btn, f32)>,
     ) -> Result<()> {
         for i in 0..l.dots_count {
             let r = l.page_dot_rect(i, active);
             let is_cur = i == active;
             let is_hv = hover == Some(Btn::PageDot(i));
-            if sh {
-                let s = self.brush(0.0, 0.0, 0.0, 0.45 * a)?;
-                let sr = D2D1_ROUNDED_RECT { rect: d2r(r.inflate(1.0)), radiusX: 3.5, radiusY: 3.5 };
-                unsafe { self.ctx.FillRoundedRectangle(&sr, &s) };
-            }
-            let br = if is_cur {
-                self.brush(accent.0, accent.1, accent.2, 0.95 * a)?
-            } else {
-                self.brush(1.0, 1.0, 1.0, (if is_hv { 0.65 } else { 0.28 }) * a)?
-            };
-            let rr = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 2.5, radiusY: 2.5 };
-            unsafe { self.ctx.FillRoundedRectangle(&rr, &br) };
+            self.with_local_scale(btn_scale_for(pressed, Btn::PageDot(i)), r.cx(), r.cy(), || {
+                if sh {
+                    let s = self.brush(0.0, 0.0, 0.0, 0.45 * a)?;
+                    let sr = D2D1_ROUNDED_RECT { rect: d2r(r.inflate(1.0)), radiusX: 3.5, radiusY: 3.5 };
+                    unsafe { self.ctx.FillRoundedRectangle(&sr, &s) };
+                }
+                let br = if is_cur {
+                    self.brush(accent.0, accent.1, accent.2, 0.95 * a)?
+                } else {
+                    self.brush(1.0, 1.0, 1.0, (if is_hv { 0.65 } else { 0.28 }) * a)?
+                };
+                let rr = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 2.5, radiusY: 2.5 };
+                unsafe { self.ctx.FillRoundedRectangle(&rr, &br) };
+                Ok(())
+            })?;
         }
         Ok(())
     }
 
-    fn draw_mixer(&self, mv: &MixerView, l: &Layout, accent: (f32, f32, f32), a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_mixer(
+        &self,
+        mv: &MixerView,
+        l: &Layout,
+        accent: (f32, f32, f32),
+        a: f32,
+        sh: bool,
+        hover: Option<Btn>,
+        pressed: Option<(Btn, f32)>,
+    ) -> Result<()> {
         if mv.rows.is_empty() {
             return self.label("No encontré la salida de audio", &self.fonts.lyric, l.mixer, (1.0, 1.0, 1.0, 0.55 * a), sh);
         }
@@ -1128,7 +1851,9 @@ impl Renderer {
             let icon = R::new(row.l + 2.0, row.t, row.l + 30.0, row.b);
             let glyph = if *muted { G_MUTE } else { G_VOLUME };
             let ia = if *muted { 0.45 } else { 0.85 };
-            self.label(glyph, &self.fonts.icon, icon, (1.0, 1.0, 1.0, ia * a), sh)?;
+            self.with_local_scale(btn_scale_for(pressed, Btn::MixerMute(i)), icon.cx(), icon.cy(), || {
+                self.label(glyph, &self.fonts.icon, icon, (1.0, 1.0, 1.0, ia * a), sh)
+            })?;
             let name_r = R::new(row.l + 32.0, row.t, row.l + 128.0, row.b);
             let na = if i == 0 { 0.95 } else { 0.8 };
             self.label(name, &self.fonts.artist, name_r, (1.0, 1.0, 1.0, na * a), sh)?;
@@ -1149,25 +1874,35 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_clip(&self, cv: &ClipView, area: R, a: f32, sh: bool, hover: Option<Btn>) -> Result<()> {
+    fn draw_clip(
+        &self,
+        cv: &ClipView,
+        area: R,
+        a: f32,
+        sh: bool,
+        hover: Option<Btn>,
+        pressed: Option<(Btn, f32)>,
+    ) -> Result<()> {
         if cv.items.is_empty() {
             return self.label("Copiá un texto y aparece acá", &self.fonts.lyric, area, (1.0, 1.0, 1.0, 0.55 * a), sh);
         }
         for (i, item) in cv.items.iter().take(ui::CLIP_ROWS).enumerate() {
             let t = area.t + 6.0 + i as f32 * ui::CLIP_ROW_H;
             let row = R::new(area.l, t, area.r, t + ui::CLIP_ROW_H - 2.0);
-            if hover == Some(Btn::ClipItem(i)) {
-                let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.2 } else { 0.1 } * a)?;
-                let rr = D2D1_ROUNDED_RECT { rect: d2r(row), radiusX: 8.0, radiusY: 8.0 };
-                unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
-            }
-            let text_r = R::new(row.l + 10.0, row.t, row.r - 10.0, row.b);
-            if cv.copied == Some(i) {
-                self.label("✓ Copiado", &self.fonts.artist, text_r, (0.55, 0.9, 0.6, a), sh)?;
-            } else {
-                let one_line: String = item.chars().take(300).map(|c| if c.is_control() { ' ' } else { c }).collect();
-                self.label(one_line.trim(), &self.fonts.artist, text_r, (1.0, 1.0, 1.0, 0.85 * a), sh)?;
-            }
+            self.with_local_scale(btn_scale_for(pressed, Btn::ClipItem(i)), row.cx(), row.cy(), || {
+                if hover == Some(Btn::ClipItem(i)) {
+                    let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.2 } else { 0.1 } * a)?;
+                    let rr = D2D1_ROUNDED_RECT { rect: d2r(row), radiusX: 8.0, radiusY: 8.0 };
+                    unsafe { self.ctx.FillRoundedRectangle(&rr, &bg) };
+                }
+                let text_r = R::new(row.l + 10.0, row.t, row.r - 10.0, row.b);
+                if cv.copied == Some(i) {
+                    self.label("✓ Copiado", &self.fonts.artist, text_r, (0.55, 0.9, 0.6, a), sh)
+                } else {
+                    let one_line: String = item.chars().take(300).map(|c| if c.is_control() { ' ' } else { c }).collect();
+                    self.label(one_line.trim(), &self.fonts.artist, text_r, (1.0, 1.0, 1.0, 0.85 * a), sh)
+                }
+            })?;
         }
         Ok(())
     }
@@ -1188,14 +1923,28 @@ impl Renderer {
                     self.label(msg, &self.fonts.lyric, area, (1.0, 1.0, 1.0, 0.55 * a), sh)?;
                 }
                 LyricsView::Synced { lines, scroll, current } => {
-                    let lo = (*scroll - 4.0).max(0.0) as usize;
-                    let hi = ((*scroll + 5.0).max(0.0) as usize).min(lines.len());
+                    // Ventana de 3 líneas (anterior tenue, actual en negrita, siguiente tenue) con desplazamiento suave.
+                    let lo = (*scroll - 2.2).max(0.0) as usize;
+                    let hi = ((*scroll + 3.2).max(0.0) as usize).min(lines.len());
                     for i in lo..hi {
-                        let cur = i == *current;
+                        let d = (i as f32 - *scroll).abs();
+                        if d > 1.7 {
+                            continue;
+                        }
+                        let focus = clamp01(1.0 - d);
+                        let edge = clamp01(1.0 - (d - 1.0).max(0.0) / 0.68);
                         let hov = hover == Some(Btn::LyricLine(i));
-                        let al = fade(i, *scroll) * if cur { 1.0 } else if hov { 0.85 } else { 0.45 };
+                        let al = (if hov { 0.88 } else { 0.40 + 0.60 * focus }) * edge;
+                        if al <= 0.01 {
+                            continue;
+                        }
+                        let r = line_rect(i, *scroll);
+                        let cur = i == *current || focus > 0.55;
                         let font = if cur { &self.fonts.lyric_cur } else { &self.fonts.lyric };
-                        self.label(&lines[i].1, font, line_rect(i, *scroll), (1.0, 1.0, 1.0, al * a), sh)?;
+                        let sc = 0.94 + 0.06 * focus;
+                        self.with_local_scale(sc, r.cx(), r.cy(), || {
+                            self.label(&lines[i].1, font, r, (1.0, 1.0, 1.0, al * a), sh)
+                        })?;
                     }
                 }
                 LyricsView::Plain { lines, scroll } => {
@@ -1305,21 +2054,6 @@ impl Renderer {
         unsafe { self.d2d_factory.CreateStrokeStyle(&props, None) }
     }
 
-    /// Entrada escalonada de los paneles: aparecen después que el contenido principal.
-    fn stagger(&self, a: f32, rise: f32) -> f32 {
-        let ap = clamp01((a - 0.35) / 0.65);
-        unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy - rise + (1.0 - ap) * 10.0));
-        }
-        ap
-    }
-
-    fn unstagger(&self, rise: f32) {
-        unsafe {
-            self.ctx.SetTransform(&Matrix3x2::translation(0.0, self.oy - rise));
-        }
-    }
-
     /// Carátula con fundido: la anterior se desvanece mientras aparece la nueva.
     fn draw_art(&self, r: R, radius: f32, a: f32) -> Result<()> {
         let t = self.art_fade();
@@ -1362,13 +2096,16 @@ impl Renderer {
         Ok(())
     }
 
-    fn button(&self, glyph: &str, fmt: &IDWriteTextFormat, r: R, a: f32, hover: bool, sh: bool) -> Result<()> {
-        if hover {
-            let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.22 } else { 0.14 } * a)?;
-            let e = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 14.0, radiusY: 14.0 };
-            unsafe { self.ctx.FillRoundedRectangle(&e, &bg) };
-        }
-        self.label(glyph, fmt, r, (1.0, 1.0, 1.0, a), sh)
+    #[allow(clippy::too_many_arguments)]
+    fn button(&self, glyph: &str, fmt: &IDWriteTextFormat, r: R, a: f32, hover: bool, sh: bool, scale: f32) -> Result<()> {
+        self.with_local_scale(scale, r.cx(), r.cy(), || {
+            if hover {
+                let bg = self.brush(1.0, 1.0, 1.0, if sh { 0.22 } else { 0.14 } * a)?;
+                let e = D2D1_ROUNDED_RECT { rect: d2r(r), radiusX: 14.0, radiusY: 14.0 };
+                unsafe { self.ctx.FillRoundedRectangle(&e, &bg) };
+            }
+            self.label(glyph, fmt, r, (1.0, 1.0, 1.0, a), sh)
+        })
     }
 
     /// Texto con sombra opcional (para que se lea sobre cualquier fondo en modo transparente).
@@ -1500,6 +2237,35 @@ fn arc(end: Vector2, r: f32) -> D2D1_ARC_SEGMENT {
         rotationAngle: 0.0,
         sweepDirection: D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
         arcSize: D2D1_ARC_SIZE_SMALL,
+    }
+}
+
+fn arc_cw(end: Vector2, r: f32) -> D2D1_ARC_SEGMENT {
+    D2D1_ARC_SEGMENT {
+        point: end,
+        size: D2D_SIZE_F { width: r, height: r },
+        rotationAngle: 0.0,
+        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+        arcSize: D2D1_ARC_SIZE_SMALL,
+    }
+}
+
+/// Composición de matrices afines Direct2D (vectores fila: `v * a * b`).
+fn mul_m3x2(a: Matrix3x2, b: Matrix3x2) -> Matrix3x2 {
+    Matrix3x2 {
+        M11: a.M11 * b.M11 + a.M12 * b.M21,
+        M12: a.M11 * b.M12 + a.M12 * b.M22,
+        M21: a.M21 * b.M11 + a.M22 * b.M21,
+        M22: a.M21 * b.M12 + a.M22 * b.M22,
+        M31: a.M31 * b.M11 + a.M32 * b.M21 + b.M31,
+        M32: a.M31 * b.M12 + a.M32 * b.M22 + b.M32,
+    }
+}
+
+fn btn_scale_for(pressed: Option<(Btn, f32)>, btn: Btn) -> f32 {
+    match pressed {
+        Some((b, s)) if b == btn => s,
+        _ => 1.0,
     }
 }
 

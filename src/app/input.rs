@@ -33,13 +33,15 @@ impl App {
             unsafe {
                 SetTimer(Some(self.hwnd), T_HOVERCHECK, 200, None);
                 let _ = KillTimer(Some(self.hwnd), T_COLLAPSE);
-                if self.expand.target < 1.0 {
+                if self.closing_content {
+                    self.retarget();
+                } else if self.expand.target < 1.0 {
                     SetTimer(Some(self.hwnd), T_EXPAND, EXPAND_DELAY_MS, None);
                 }
             }
         }
         let (x, y) = self.to_dips(lp);
-        let btn = if self.expand.target > 0.5 && self.expand.value > 0.6 {
+        let btn = if !self.closing_content && self.expand.target > 0.5 && self.expand.value > 0.6 {
             let n = match &self.lyrics {
                 Some(Lyrics::Synced(v)) => v.len(),
                 _ => 0,
@@ -66,6 +68,9 @@ impl App {
     pub(crate) fn on_mouse_leave(&mut self) {
         if !self.hover {
             return;
+        }
+        if self.btn_down {
+            self.on_mouse_up();
         }
         self.hover = false;
         unsafe {

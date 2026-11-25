@@ -40,7 +40,7 @@ use config::Config;
 use lyrics::Lyrics;
 use mascot::{Mascot, Mood};
 use media::{Cmd, MediaInfo};
-use render::{AskView, ClipView, MixerView, ShelfView, TodayView, Collapsed, Expanded, Frame, LyricsView, MediaView, Renderer};
+use render::{AskView, ClipView, CollapsedSnap, Expanded, Frame, LyricsView, MediaView, MixerView, PrevSub, Renderer, ShelfView, TodayView};
 use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -91,7 +91,7 @@ const T_DATA: usize = 18;
 const T_CARET: usize = 19;
 /// Temporizador rápido lanzado desde el input (`timer 10m`).
 const T_QTIMER: usize = 20;
-/// Animaciones vivas (~10 FPS): ecualizador y Esme pensando. Solo corre mientras hacen falta.
+/// Animaciones vivas (~12.5 FPS, máx. 15 FPS): ecualizador, Esme pensando y Pomodoro respirando. Solo corre mientras hacen falta.
 const T_ANIM: usize = 21;
 /// Clima y calendario se actualizan cada una hora.
 const DATA_REFRESH_MS: u32 = 60 * 60 * 1000;
@@ -105,6 +105,7 @@ struct DataInbox {
     rates: Option<calc::RatesCache>,
 }
 const OVERLAY_MS: u32 = 1600;
+const CHARGER_OVERLAY_MS: u32 = 2200;
 const WM_POWERBROADCAST: u32 = 0x0218;
 const PBT_POWERSETTINGCHANGE: usize = 0x8013;
 const HSHELL_LANGUAGE: usize = 8;
@@ -114,6 +115,25 @@ struct SysOverlay {
     glyph: &'static str,
     text: String,
     level: Option<f32>,
+    /// `Some(true)` = cargador conectado, `Some(false)` = con batería (dibuja anillo + porcentaje animado).
+    charger: Option<bool>,
+}
+
+/// Identifica el estado semántico de la píldora contraída para detectar transiciones (morph).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CollapsedKey {
+    OverlayVol,
+    OverlayBright,
+    OverlayText(&'static str),
+    Charger,
+    Toast,
+    QuickTimer,
+    Pomo,
+    Lyric,
+    Minimal,
+    Media,
+    Mascot,
+    Clock,
 }
 const WM_APPBAR: u32 = WM_APP + 4;
 const ABN_FULLSCREENAPP: usize = 2;
@@ -154,6 +174,49 @@ struct App {
     sw: Spring,
     sh: Spring,
     expand: Spring,
+    /// Visibilidad del contenido expandido (cierre en dos tiempos: primero 1→0 en ~120 ms, luego se encoge la forma).
+    content_vis: Spring,
+    closing_content: bool,
+    /// Morph de contenido en la píldora contraída (0→1 en ~220 ms).
+    pill_morph: Spring,
+    last_collapsed_key: CollapsedKey,
+    last_collapsed_snap: CollapsedSnap,
+    prev_collapsed: Option<CollapsedSnap>,
+    /// Morph + deslizamiento entre páginas del panel expandido (0→1 en ~220 ms).
+    page_morph: Spring,
+    page_dir: f32,
+    last_page: usize,
+    last_has_media: bool,
+    prev_page: Option<usize>,
+    /// Copia liviana de filas del mezclador solo mientras dura su fundido saliente (~220 ms).
+    prev_mixer_rows: Vec<(String, f32, bool)>,
+    /// Rebote "gelatina" horizontal al llegar un overlay o toast (0 = reposo, pico ~+0.06).
+    jelly: Spring,
+    /// Tareas: progreso del tachado/relleno por ítem, "pop" del círculo y contador deslizante.
+    todo_strike: Vec<Spring>,
+    todo_pop: Spring,
+    todo_pop_idx: Option<usize>,
+    todo_done_prev: usize,
+    todo_count_dir: f32,
+    todo_count_anim: Spring,
+    /// Agua: entrada escalonada de las 24 barritas al abrir Hoy, rebote de la hora actual y número deslizante.
+    water_bars_open: Spring,
+    water_bars_shown: bool,
+    water_bar_bump: Spring,
+    water_bump_hour: Option<usize>,
+    water_prev: u32,
+    water_dir: f32,
+    water_num_anim: Spring,
+    /// Cargador: conteo suave del porcentaje anterior al nuevo y barrido del anillo.
+    charge_pct: Spring,
+    charge_ring: Spring,
+    /// Estante: entrada del archivo recién soltado (escala 0.9 → 1.0 + enfoque).
+    shelf_enter: Spring,
+    shelf_new_count: usize,
+    /// Botones: compresión al apretar (~92 %) y retorno con resorte.
+    pressed_btn: Option<Btn>,
+    btn_down: bool,
+    btn_scale: Spring,
     mascot_vis: Spring,
     lyric_scroll: Spring,
     last_tick: i64,
@@ -314,7 +377,23 @@ fn main() -> Result<()> {
         let _ = QueryPerformanceFrequency(&mut qpf);
         let (media_tx, media_shared) = media::start(hwnd);
         let start = if cfg.notch_minimo { ui::MINIMAL } else { ui::PILL };
+        let start_key = if cfg.notch_minimo {
+            CollapsedKey::Minimal
+        } else if cfg.pet().is_some() {
+            CollapsedKey::Mascot
+        } else {
+            CollapsedKey::Clock
+        };
         let pomo = productivity::Pomodoro::new(cfg.pomo_foco, cfg.pomo_descanso);
+        let water = productivity::Water::load();
+        let water_prev = water.glasses;
+        let todo = todo::TodoList::load();
+        let todo_strike: Vec<Spring> = todo
+            .items
+            .iter()
+            .map(|it| Spring::new(if it.done { 1.0 } else { 0.0 }, 320.0, 0.0).with_eps(0.004))
+            .collect();
+        let todo_done_prev = todo.items.iter().filter(|it| it.done).count();
         let app = App {
             hwnd,
             settings: None,
@@ -323,6 +402,39 @@ fn main() -> Result<()> {
             sw: Spring::new(start.w, 380.0, 0.28).with_eps(0.05),
             sh: Spring::new(start.h, 380.0, 0.28).with_eps(0.05),
             expand: Spring::new(0.0, 380.0, 0.28),
+            content_vis: Spring::new(0.0, 1350.0, 0.0).with_eps(0.005),
+            closing_content: false,
+            pill_morph: Spring::new(1.0, 560.0, 0.0).with_eps(0.004),
+            last_collapsed_key: start_key,
+            last_collapsed_snap: CollapsedSnap::Minimal,
+            prev_collapsed: None,
+            page_morph: Spring::new(1.0, 560.0, 0.0).with_eps(0.004),
+            page_dir: 0.0,
+            last_page: 0,
+            last_has_media: false,
+            prev_page: None,
+            prev_mixer_rows: Vec::new(),
+            jelly: Spring::new(0.0, 480.0, 0.42).with_eps(0.001),
+            todo_strike,
+            todo_pop: Spring::new(1.0, 420.0, 0.45).with_eps(0.002),
+            todo_pop_idx: None,
+            todo_done_prev,
+            todo_count_dir: 1.0,
+            todo_count_anim: Spring::new(1.0, 420.0, 0.0).with_eps(0.004),
+            water_bars_open: Spring::new(1.0, 120.0, 0.0).with_eps(0.004),
+            water_bars_shown: false,
+            water_bar_bump: Spring::new(1.0, 320.0, 0.25).with_eps(0.003),
+            water_bump_hour: None,
+            water_prev,
+            water_dir: 1.0,
+            water_num_anim: Spring::new(1.0, 420.0, 0.0).with_eps(0.004),
+            charge_pct: Spring::new(0.0, 140.0, 0.0).with_eps(0.05),
+            charge_ring: Spring::new(0.0, 160.0, 0.0).with_eps(0.003),
+            shelf_enter: Spring::new(1.0, 340.0, 0.14).with_eps(0.003),
+            shelf_new_count: 0,
+            pressed_btn: None,
+            btn_down: false,
+            btn_scale: Spring::new(1.0, 520.0, 0.25).with_eps(0.002),
             // La mascota aparece con un rebote notorio.
             mascot_vis: Spring::new(0.0, 230.0, 0.38).with_eps(0.002),
             lyric_scroll: Spring::new(0.0, 220.0, 0.0).with_eps(0.002),
@@ -370,8 +482,8 @@ fn main() -> Result<()> {
             today_on: false,
             today_loaded: false,
             pomo,
-            water: productivity::Water::load(),
-            todo: todo::TodoList::load(),
+            water,
+            todo,
             mixer_on: false,
             mixer: mixer::Mixer::default(),
             mixer_vis: Vec::new(),

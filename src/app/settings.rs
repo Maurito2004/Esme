@@ -82,6 +82,7 @@ impl App {
                             row("Notch mínimo", "Una línea fina arriba cuando está cerrado", tog(c.notch_minimo, Key::Minimo)),
                             row("Fondo transparente al expandir", "Solo la píldora queda negra; el resto flota sobre tu escritorio", tog(c.transparente, Key::Transparente)),
                             row("Píldora flotante", "Separada del borde de arriba, con las 4 esquinas redondeadas", tog(c.flotante, Key::Flotante)),
+                            row("Línea de luz en la píldora", "Brillo fino azul → acento pegado al borde de abajo cuando está cerrada", tog(c.linea_luz, Key::LineaLuz)),
                         ],
                     },
                     Group {
@@ -452,6 +453,12 @@ impl App {
                 self.last_region = (-1, -1, -1);
                 self.layout();
                 self.retarget();
+                self.refresh();
+                return;
+            }
+            Key::LineaLuz => {
+                c.linea_luz = !c.linea_luz;
+                let _ = self.cfg.save();
                 self.refresh();
                 return;
             }

@@ -158,7 +158,25 @@ impl App {
     }
 
     pub(crate) fn water_add(&mut self, d: i32) {
+        let prev = self.water.glasses;
         self.water.add(d);
+        if self.water.glasses != prev {
+            let was = self.is_animating();
+            self.water_prev = prev;
+            self.water_dir = if self.water.glasses > prev { 1.0 } else { -1.0 };
+            self.water_num_anim.value = 0.0;
+            self.water_num_anim.velocity = 0.0;
+            self.water_num_anim.set_target(1.0);
+            if self.water.glasses > prev {
+                self.water_bump_hour = Some(productivity::current_hour());
+                self.water_bar_bump.value = 0.0;
+                self.water_bar_bump.velocity = 0.0;
+                self.water_bar_bump.set_target(1.0);
+            }
+            if !was {
+                self.last_tick = self.now();
+            }
+        }
         if d > 0 && self.water.glasses == self.cfg.agua_meta {
             self.show_toast("💧 ¡Llegaste a tu meta de agua de hoy!".into(), 3000);
         }
@@ -222,6 +240,14 @@ impl App {
 
     pub(crate) fn add_todo_from_input(&mut self) {
         if self.todo.add_quick(&self.todo_input) {
+            self.todo_strike.insert(0, Spring::new(0.0, 320.0, 0.0).with_eps(0.004));
+            self.todo_strike.truncate(self.todo.items.len());
+            if let Some(p) = self.todo_pop_idx.as_mut() {
+                *p += 1;
+                if *p >= self.todo.items.len() {
+                    self.todo_pop_idx = None;
+                }
+            }
             self.todo_input.clear();
             self.todo_scroll = 0;
             self.retarget();
@@ -231,14 +257,71 @@ impl App {
 
     pub(crate) fn toggle_todo(&mut self, visible_row: usize) {
         let idx = self.todo_scroll + visible_row;
+        let old_done = self.todo.items.iter().filter(|it| it.done).count();
         if self.todo.toggle(idx) {
+            let done = self.todo.items.get(idx).map(|it| it.done).unwrap_or(false);
+            let new_done = self.todo.items.iter().filter(|it| it.done).count();
+            let was = self.is_animating();
+            if self.todo_strike.len() != self.todo.items.len() {
+                self.todo_strike = self
+                    .todo
+                    .items
+                    .iter()
+                    .map(|it| Spring::new(if it.done { 1.0 } else { 0.0 }, 320.0, 0.0).with_eps(0.004))
+                    .collect();
+                if let Some(s) = self.todo_strike.get_mut(idx) {
+                    s.value = if done { 0.0 } else { 1.0 };
+                }
+            }
+            if let Some(s) = self.todo_strike.get_mut(idx) {
+                s.set_target(if done { 1.0 } else { 0.0 });
+            }
+            if done {
+                self.todo_pop_idx = Some(idx);
+                self.todo_pop.value = 0.72;
+                self.todo_pop.velocity = 5.5;
+                self.todo_pop.set_target(1.0);
+            } else if self.todo_pop_idx == Some(idx) {
+                self.todo_pop_idx = None;
+            }
+            if new_done != old_done {
+                self.todo_done_prev = old_done;
+                self.todo_count_dir = if new_done > old_done { 1.0 } else { -1.0 };
+                self.todo_count_anim.value = 0.0;
+                self.todo_count_anim.velocity = 0.0;
+                self.todo_count_anim.set_target(1.0);
+            }
+            if !was {
+                self.last_tick = self.now();
+            }
             self.refresh();
         }
     }
 
     pub(crate) fn delete_todo(&mut self, visible_row: usize) {
         let idx = self.todo_scroll + visible_row;
+        let old_done = self.todo.items.iter().filter(|it| it.done).count();
         if self.todo.remove(idx) {
+            if idx < self.todo_strike.len() {
+                self.todo_strike.remove(idx);
+            }
+            self.todo_pop_idx = match self.todo_pop_idx {
+                Some(p) if p == idx => None,
+                Some(p) if p > idx => Some(p - 1),
+                other => other,
+            };
+            let new_done = self.todo.items.iter().filter(|it| it.done).count();
+            if new_done != old_done {
+                let was = self.is_animating();
+                self.todo_done_prev = old_done;
+                self.todo_count_dir = if new_done > old_done { 1.0 } else { -1.0 };
+                self.todo_count_anim.value = 0.0;
+                self.todo_count_anim.velocity = 0.0;
+                self.todo_count_anim.set_target(1.0);
+                if !was {
+                    self.last_tick = self.now();
+                }
+            }
             let max_scroll = self.todo.items.len().saturating_sub(ui::TODO_VISIBLE);
             self.todo_scroll = self.todo_scroll.min(max_scroll);
             self.retarget();

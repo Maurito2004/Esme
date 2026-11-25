@@ -30,6 +30,9 @@ pub struct Config {
     /// Píldora flotante: separada del borde de arriba, con las 4 esquinas redondeadas.
     #[nserde(default)]
     pub flotante: bool,
+    /// Línea de luz fina en el borde inferior de la píldora cerrada.
+    #[nserde(default = "true")]
+    pub linea_luz: bool,
     /// En pantalla completa (juego, video): pasar al otro monitor en vez de solo esconderse.
     #[nserde(default = "true")]
     pub mover_monitor: bool,
@@ -108,6 +111,7 @@ impl Default for Config {
             notch_minimo: false,
             transparente: false,
             flotante: false,
+            linea_luz: true,
             mover_monitor: true,
             juegos_extra: Vec::new(),
             tema_menu: "oscuro".into(),

@@ -25,12 +25,12 @@ impl App {
                 let _ = KillTimer(Some(self.hwnd), T_BLINK);
             }
             self.blink_timer = need_blink;
-            // Ecualizador / Esme pensando: ~10 FPS solo mientras se ven. En reposo, cero timers.
-            let need_anim = self.eq_live() || self.ask_thinking();
+            // Ecualizador / Esme pensando / Pomodoro respirando: ~12.5 FPS (≤ 15 FPS) solo mientras se ven. En reposo, cero timers.
+            let need_anim = self.eq_live() || self.ask_thinking() || self.pomo_breathing();
             if need_anim != self.anim_timer {
                 self.anim_timer = need_anim;
                 if need_anim {
-                    SetTimer(Some(self.hwnd), T_ANIM, 100, None);
+                    SetTimer(Some(self.hwnd), T_ANIM, 80, None);
                 } else {
                     let _ = KillTimer(Some(self.hwnd), T_ANIM);
                     self.refresh();
@@ -139,7 +139,7 @@ impl App {
             T_POMO => self.on_pomo_tick(),
             T_QTIMER => self.on_quick_timer_tick(),
             T_ANIM => {
-                if self.eq_live() || self.ask_thinking() {
+                if self.eq_live() || self.ask_thinking() || self.pomo_breathing() {
                     self.refresh();
                 } else {
                     self.update_timers();

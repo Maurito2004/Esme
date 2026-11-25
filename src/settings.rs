@@ -53,6 +53,7 @@ pub enum Key {
     Minimo,
     Transparente,
     Flotante,
+    LineaLuz,
     Pet,
     Tamano,
     Tema,

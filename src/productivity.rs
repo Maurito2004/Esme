@@ -105,6 +105,9 @@ pub struct Water {
     pub date: String,
     #[nserde(default)]
     pub glasses: u32,
+    /// Vasos registrados por hora del día (0..23). Compatible con archivos viejos gracias a `default`.
+    #[nserde(default)]
+    pub hours: Vec<u32>,
 }
 
 fn water_path() -> std::path::PathBuf {
@@ -117,6 +120,12 @@ pub fn today() -> String {
     format!("{:04}-{:02}-{:02}", t.wYear, t.wMonth, t.wDay)
 }
 
+/// Hora local actual (0..23).
+pub fn current_hour() -> usize {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    (t.wHour as usize).min(23)
+}
+
 impl Water {
     pub fn load() -> Self {
         let w: Water = std::fs::read_to_string(water_path())
@@ -127,15 +136,47 @@ impl Water {
     }
 
     /// Los vasos se reinician cada día.
-    pub fn for_today(self) -> Self {
+    pub fn for_today(mut self) -> Self {
         let d = today();
-        if self.date == d { self } else { Water { date: d, glasses: 0 } }
+        if self.date == d {
+            self.hours.resize(24, 0);
+            self
+        } else {
+            Water { date: d, glasses: 0, hours: vec![0; 24] }
+        }
+    }
+
+    /// Devuelve un arreglo fijo de 24 horas (0..23) para dibujar las barritas.
+    pub fn hourly(&self) -> [u32; 24] {
+        let mut out = [0u32; 24];
+        for (dst, src) in out.iter_mut().zip(self.hours.iter()) {
+            *dst = *src;
+        }
+        out
     }
 
     pub fn add(&mut self, delta: i32) {
         let me = std::mem::take(self).for_today();
         *self = me;
+        let prev = self.glasses;
         self.glasses = (self.glasses as i32 + delta).clamp(0, 99) as u32;
+        let h = current_hour();
+        if delta > 0 {
+            self.hours[h] = self.hours[h].saturating_add(delta as u32);
+        } else if delta < 0 && self.glasses < prev {
+            let mut rem = prev - self.glasses;
+            for step in 0..24 {
+                if rem == 0 {
+                    break;
+                }
+                let idx = (h + 24 - step) % 24;
+                if self.hours[idx] > 0 {
+                    let take = self.hours[idx].min(rem);
+                    self.hours[idx] -= take;
+                    rem -= take;
+                }
+            }
+        }
         let _ = std::fs::create_dir_all(crate::config::data_dir());
         let _ = std::fs::write(water_path(), self.serialize_json());
     }

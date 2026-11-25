@@ -9,13 +9,48 @@ impl App {
         if self.hidden {
             return; // en modo juego no molestamos
         }
+        let trigger_jelly = self.overlay.is_none()
+            || level.is_none()
+            || self.overlay.as_ref().map(|o| o.level.is_some() && o.charger.is_none()) != Some(level.is_some());
         if let Some(v) = level {
             self.level.set_target(v);
         }
-        self.overlay = Some(SysOverlay { glyph, text, level });
+        self.overlay = Some(SysOverlay { glyph, text, level, charger: None });
         unsafe {
             SetTimer(Some(self.hwnd), T_OVERLAY, OVERLAY_MS, None);
         }
+        if trigger_jelly {
+            self.trigger_jelly();
+        }
+        self.retarget();
+        self.refresh();
+    }
+
+    /// Overlay del cargador: anillo circular que se dibuja y porcentaje que cuenta desde el valor anterior al nuevo.
+    pub(crate) fn show_charger_overlay(&mut self, charging: bool, start_pct: f32, target_pct: f32) {
+        if self.hidden {
+            return;
+        }
+        let was = self.is_animating();
+        self.charge_pct.value = start_pct.clamp(0.0, 100.0);
+        self.charge_pct.velocity = 0.0;
+        self.charge_pct.set_target(target_pct.clamp(0.0, 100.0));
+        self.charge_ring.value = 0.0;
+        self.charge_ring.velocity = 0.0;
+        self.charge_ring.set_target(target_pct.clamp(0.0, 100.0) / 100.0);
+        self.overlay = Some(SysOverlay {
+            glyph: if charging { "\u{E945}" } else { "\u{E83F}" },
+            text: if charging { "Cargando".into() } else { "Con batería".into() },
+            level: None,
+            charger: Some(charging),
+        });
+        unsafe {
+            SetTimer(Some(self.hwnd), T_OVERLAY, CHARGER_OVERLAY_MS, None);
+        }
+        if !was {
+            self.last_tick = self.now();
+        }
+        self.trigger_jelly();
         self.retarget();
         self.refresh();
     }
@@ -97,6 +132,17 @@ impl App {
                 // Batería baja: aviso al bajar de 20 % y de 10 % (solo sin cargador).
                 let prev = self.last_battery.replace(value);
                 let on_battery = self.last_ac.map(|a| a != 0).unwrap_or(false);
+                // Si el overlay de cargador está visible, contamos suavemente al nuevo porcentaje.
+                if self.overlay.as_ref().and_then(|o| o.charger).is_some() && value <= 100 {
+                    let was = self.is_animating();
+                    self.charge_pct.set_target(value as f32);
+                    self.charge_ring.set_target(value as f32 / 100.0);
+                    SetTimer(Some(self.hwnd), T_OVERLAY, CHARGER_OVERLAY_MS, None);
+                    if !was {
+                        self.last_tick = self.now();
+                    }
+                    self.refresh();
+                }
                 if let Some(p) = prev {
                     for limit in [20u32, 10] {
                         if on_battery && p > limit && value <= limit && self.cfg.aviso_bateria {
@@ -119,11 +165,19 @@ impl App {
             if st.BatteryFlag == 128 {
                 return; // PC sin batería
             }
-            let pct = if st.BatteryLifePercent <= 100 { format!(" · {}%", st.BatteryLifePercent) } else { String::new() };
-            if src == 0 {
-                self.show_overlay("\u{E945}", format!("Cargando{pct}"), None);
+            let charging = src == 0;
+            if st.BatteryLifePercent <= 100 {
+                let target = st.BatteryLifePercent as f32;
+                let start = match self.last_battery {
+                    Some(p) if p <= 100 && p != st.BatteryLifePercent as u32 => p as f32,
+                    _ => (target - 10.0).max(0.0),
+                };
+                self.last_battery = Some(st.BatteryLifePercent as u32);
+                self.show_charger_overlay(charging, start, target);
+            } else if charging {
+                self.show_overlay("\u{E945}", "Cargando".into(), None);
             } else {
-                self.show_overlay("\u{E83F}", format!("Con batería{pct}"), None);
+                self.show_overlay("\u{E83F}", "Con batería".into(), None);
             }
         }
     }
@@ -171,7 +225,7 @@ impl App {
     }
 
     pub(crate) fn on_click(&mut self, lp: LPARAM) {
-        if self.expand.value < 0.6 {
+        if self.closing_content || self.expand.value < 0.6 {
             return;
         }
         let (x, y) = self.to_dips(lp);
@@ -289,6 +343,7 @@ impl App {
             }
             Btn::ShelfClear => {
                 self.shelf.clear();
+                self.shelf_new_count = 0;
                 self.retarget();
                 self.refresh();
             }
@@ -370,6 +425,9 @@ impl App {
             self.focus_ask_input(false);
             self.focus_todo_input(false);
         } else {
+            if self.mixer_on && self.want_expanded() && self.expand.value > 0.25 {
+                self.prev_mixer_rows = self.snapshot_mixer_rows();
+            }
             self.mixer_on = false;
             self.mixer.clear();
             self.mixer_vis.clear();
@@ -407,7 +465,7 @@ impl App {
 
     /// Botón apretado sobre una barrita: empieza a arrastrar (el mouse queda capturado).
     pub(crate) fn mixer_press(&mut self, x: f32, y: f32) -> bool {
-        if !self.mixer_on || self.expand.value < 0.6 {
+        if !self.mixer_on || self.closing_content || self.expand.value < 0.6 {
             return false;
         }
         let hit = self.layout_now().hit(x, y, 0.0, 0, 0, 0, 0, self.active_page());

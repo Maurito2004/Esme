@@ -18,6 +18,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 // DoDragDrop tiene su propio bucle de mensajes: lo llamamos sin tener el estado prestado.
                 if let Some(path) = drag {
                     shelf::drag_out(&path);
+                    with_app(|a| a.on_mouse_up());
                 }
                 LRESULT(0)
             }
@@ -36,6 +37,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     let (x, y) = a.to_dips(lp);
                     if let Some(Btn::ShelfItem(i)) = a.layout_now().hit(x, y, 0.0, 0, 0, a.shelf_on_count(), 0, a.active_page()) {
                         a.shelf.remove(i);
+                        a.shelf_new_count = a.shelf_new_count.min(a.shelf.items.len());
                         a.retarget();
                         a.refresh();
                     }
@@ -101,6 +103,7 @@ pub(crate) extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             }
             WM_LBUTTONUP => {
                 with_app(|a| {
+                    a.on_mouse_up();
                     // El mezclador ya aplicó el volumen al apretar y al arrastrar.
                     if a.mixer_release() {
                         return;

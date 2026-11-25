@@ -127,7 +127,7 @@ impl App {
 
     pub(crate) fn redraw_with(&mut self, vsync: bool) {
         DBG_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let w = self.sw.value.max(4.0);
+        let w = (self.sw.value * (1.0 + self.jelly.value)).max(4.0);
         let h = self.sh.value.max(2.0);
         let radius = (h * 0.42).clamp(2.5, 30.0);
         let ear = (h * 0.28).clamp(2.5, 14.0);
@@ -140,37 +140,119 @@ impl App {
         let events = self.event_lines();
         let tiles: Vec<(&'static str, String)> =
             self.shelf.items.iter().map(|p| (shelf::glyph(p), shelf::file_name(p))).collect();
-        let mixer_rows: Vec<(String, f32, bool)> = self
-            .mixer
-            .channels
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (c.name.clone(), self.mixer_vis.get(i).map(|s| s.value).unwrap_or(c.level), c.muted))
-            .collect();
+        let mixer_rows = self.snapshot_mixer_rows();
         let pomo_text = self.pomo.text();
         let qtimer = self.quick_timer_status();
         let qtimer_text = qtimer.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
         let inline_prev = self.ask_inline_preview();
-        let collapsed = if let Some(o) = &self.overlay {
-            Collapsed::Overlay { glyph: o.glyph, text: &o.text, level: o.level.map(|_| self.level.value) }
+
+        // Guardamos la instantánea actual de la píldora contraída antes de armar `Frame`
+        // (si el próximo cambio de estado dispara morph, será el contenido saliente).
+        self.last_collapsed_snap = if let Some(o) = &self.overlay {
+            if let Some(charging) = o.charger {
+                CollapsedSnap::Charger {
+                    charging,
+                    pct: self.charge_pct.value,
+                    ring: self.charge_ring.value,
+                }
+            } else {
+                CollapsedSnap::Overlay { glyph: o.glyph, text: o.text.clone(), level: o.level.map(|_| self.level.value) }
+            }
         } else if let Some(t) = &self.toast {
-            Collapsed::Lyric(t)
-        } else if let Some((_, prog)) = qtimer {
-            Collapsed::Overlay { glyph: "\u{E916}", text: &qtimer_text, level: Some(prog) }
+            CollapsedSnap::Lyric(t.clone())
+        } else if let Some((_, prog)) = &qtimer {
+            CollapsedSnap::Overlay { glyph: "\u{E916}", text: qtimer_text.clone(), level: Some(*prog) }
         } else if self.pomo_pill() {
             // Pomodoro: cuenta regresiva viva en la píldora (rojo tomate = foco, verde = descanso).
             let glyph = if self.pomo.mode == productivity::Mode::Focus { "\u{E916}" } else { "\u{E708}" };
-            Collapsed::Overlay { glyph, text: &pomo_text, level: Some(self.pomo.progress()) }
+            CollapsedSnap::Overlay { glyph, text: pomo_text.clone(), level: Some(self.pomo.progress()) }
         } else if self.lyric_pill() {
-            Collapsed::Lyric(&line)
+            if let Some(lines) = self.synced_lines() {
+                if !lines.is_empty() && self.lyric_current.is_some() {
+                    let max_idx = (lines.len() - 1) as f32;
+                    let s = self.lyric_scroll.value.clamp(0.0, max_idx);
+                    let base = (s.floor() as usize).min(lines.len() - 1);
+                    let frac = (s - base as f32).clamp(0.0, 1.0);
+                    let cur = lines[base].1.clone();
+                    let next = lines.get(base + 1).map(|l| l.1.clone()).unwrap_or_default();
+                    CollapsedSnap::LyricRoll { cur, next, frac }
+                } else {
+                    CollapsedSnap::Lyric(line.clone())
+                }
+            } else {
+                CollapsedSnap::Lyric(line.clone())
+            }
         } else if self.cfg.notch_minimo {
-            Collapsed::Minimal
+            CollapsedSnap::Minimal
         } else if self.playing() {
-            Collapsed::Media { time: &self.time_text }
+            CollapsedSnap::Media { time: self.time_text.clone() }
         } else if self.cfg.pet().is_some() || self.mascot_vis.value > 0.01 {
-            Collapsed::Mascot { time: &self.time_text, eyes, pet: self.cfg.pet().unwrap_or(self.last_pet) }
+            CollapsedSnap::Mascot { time: self.time_text.clone(), eyes, pet: self.cfg.pet().unwrap_or(self.last_pet) }
         } else {
-            Collapsed::Clock(&self.time_text)
+            CollapsedSnap::Clock(self.time_text.clone())
+        };
+
+        // Valores propios derivados antes de prestar campos individuales a `Frame` (evita solapar con `self.renderer`).
+        let cx = self.surface_cx();
+        let layout = self.layout_now();
+        let prev_layout = if self.page_morph.value < 0.999 {
+            self.prev_page.map(|p| self.layout_for_page(p))
+        } else {
+            None
+        };
+        let active_page = self.active_page();
+        let float_gap = self.float_gap();
+        let eq_t = if self.anim_timer && self.eq_live() { Some(self.anim_start.elapsed().as_secs_f32()) } else { None };
+        let pomo_breath = if self.anim_timer && self.pomo_breathing() {
+            let t = self.anim_start.elapsed().as_secs_f32();
+            let phase = 0.5 - 0.5 * (t * std::f32::consts::TAU / 4.0).cos();
+            Some((phase, self.pomo.mode == productivity::Mode::Focus))
+        } else {
+            None
+        };
+        let pressed = self.pressed_btn.map(|b| (b, self.btn_scale.value));
+        let has_media = self.has_media();
+        let has_clip = !self.clip.items.is_empty();
+        let pomo_label = if self.pomo.mode == productivity::Mode::Focus { "Pomodoro · foco" } else { "Pomodoro · descanso" };
+        let pomo_running = self.pomo.running();
+        let pomo_progress = self.pomo.progress();
+        let water_hours = self.water.hourly();
+        let water_cur_hour = productivity::current_hour();
+        let water_bump = self.water_bump_hour.map(|h| (h, self.water_bar_bump.value));
+        let ask_pet = self.ask.as_ref().and_then(|ask| {
+            self.cfg.pet().map(|p| {
+                let mut e = self.mascot.eyes();
+                e.scale = 1.0;
+                if ask.loading {
+                    // Pensando: mira arriba y de lado a lado, despacito.
+                    let t = self.anim_start.elapsed().as_secs_f32();
+                    e.gaze = ((t * 2.2).sin() * 1.6, -1.3);
+                } else if ask.focus && !ask.input.is_empty() {
+                    // Escribiendo: mira hacia el input.
+                    e.gaze = (0.0, 1.6);
+                } else {
+                    e.gaze = (0.0, 0.0);
+                }
+                if e.mood == Mood::Asleep {
+                    e.open = 1.0;
+                    e.mood = Mood::Awake;
+                }
+                (e, p)
+            })
+        });
+
+        let collapsed = self.last_collapsed_snap.as_ref();
+        let lyrics_view = match &self.lyrics {
+            None | Some(Lyrics::Loading) => LyricsView::Message("Buscando letra…"),
+            Some(Lyrics::NotFound) => LyricsView::Message("No encontré la letra de esta canción"),
+            Some(Lyrics::Mix) => LyricsView::Message("Es una mezcla larga: no tiene una letra"),
+            Some(Lyrics::Error) => LyricsView::Message("Sin conexión con lrclib.net"),
+            Some(Lyrics::Synced(lines)) => LyricsView::Synced {
+                lines,
+                scroll: self.lyric_scroll.value,
+                current: self.lyric_current.unwrap_or(usize::MAX),
+            },
+            Some(Lyrics::Plain(lines)) => LyricsView::Plain { lines, scroll: self.lyric_scroll.value },
         };
 
         let (pos_s, dur_s);
@@ -179,22 +261,6 @@ impl App {
                 let pos = m.position_now();
                 pos_s = ui::fmt_time(pos);
                 dur_s = ui::fmt_time(m.duration);
-                let lyrics = if self.lyrics_on {
-                    Some(match &self.lyrics {
-                        None | Some(Lyrics::Loading) => LyricsView::Message("Buscando letra…"),
-                        Some(Lyrics::NotFound) => LyricsView::Message("No encontré la letra de esta canción"),
-                        Some(Lyrics::Mix) => LyricsView::Message("Es una mezcla larga: no tiene una letra"),
-                        Some(Lyrics::Error) => LyricsView::Message("Sin conexión con lrclib.net"),
-                        Some(Lyrics::Synced(lines)) => LyricsView::Synced {
-                            lines,
-                            scroll: self.lyric_scroll.value,
-                            current: self.lyric_current.unwrap_or(usize::MAX),
-                        },
-                        Some(Lyrics::Plain(lines)) => LyricsView::Plain { lines, scroll: self.lyric_scroll.value },
-                    })
-                } else {
-                    None
-                };
                 Expanded::Media(MediaView {
                     title: &m.title,
                     artist: &m.artist,
@@ -204,7 +270,7 @@ impl App {
                     progress: if m.duration > 0.5 { Some((pos / m.duration) as f32) } else { None },
                     pos: pos_s,
                     dur: dur_s,
-                    lyrics,
+                    lyrics: if self.lyrics_on { Some(lyrics_view) } else { None },
                 })
             }
             _ => Expanded::Clock { time: &self.time_text, date: &self.date_text },
@@ -216,39 +282,149 @@ impl App {
         } else {
             &[]
         };
+        let todo_strikes: Vec<f32> = (self.todo_scroll..todo_end)
+            .map(|i| self.todo_strike.get(i).map(|s| s.value).unwrap_or_else(|| if self.todo.items[i].done { 1.0 } else { 0.0 }))
+            .collect();
+        let todo_done = self.todo.items.iter().filter(|it| it.done).count();
+        let todo_pop = self
+            .todo_pop_idx
+            .and_then(|idx| idx.checked_sub(self.todo_scroll))
+            .filter(|&r| r < ui::TODO_VISIBLE)
+            .map(|r| (r, self.todo_pop.value));
 
-        let frame = Frame {
-            cx: self.surface_cx(),
-            shape_w: w,
-            shape_h: h,
-            radius,
-            ear,
-            expand: self.expand.value,
-            transparent: self.cfg.transparente,
-            collapsed,
-            expanded,
-            layout: self.layout_now(),
-            hover: self.hover_btn,
-            mascot_vis: self.mascot_vis.value,
-            accent: (self.aura[0].value, self.aura[1].value, self.aura[2].value),
-            active_page: self.active_page(),
-            float_gap: self.float_gap(),
-            eq_t: if self.anim_timer && self.eq_live() { Some(self.anim_start.elapsed().as_secs_f32()) } else { None },
-            clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
-            shelf: if self.shelf_on { Some(ShelfView { tiles: &tiles, drop_hover: self.drop_hover }) } else { None },
-            today: if self.today_on {
-                Some(TodayView {
-                    pomo_label: if self.pomo.mode == productivity::Mode::Focus { "Pomodoro · foco" } else { "Pomodoro · descanso" },
-                    pomo_time: self.pomo.text(),
-                    pomo_running: self.pomo.running(),
-                    pomo_progress: self.pomo.progress(),
+        let prev_sub = prev_layout.and_then(|pl| match self.prev_page? {
+            1 => self.ask.as_ref().map(|ask| {
+                (
+                    pl,
+                    PrevSub::Ask(AskView {
+                        mode_label: ask.mode.label(),
+                        is_translate: ask.mode == ask_esme::AskMode::Translate,
+                        input: &ask.input,
+                        placeholder: ask.mode.placeholder(),
+                        focused: false,
+                        caret_on: false,
+                        selected_all: false,
+                        inline_preview: inline_prev.as_deref(),
+                        loading: ask.loading,
+                        response: &ask.response,
+                        copied: ask.copied_feedback,
+                        has_clip,
+                        pet: ask_pet,
+                    }),
+                )
+            }),
+            2 => Some((
+                pl,
+                PrevSub::Today(TodayView {
+                    pomo_label,
+                    pomo_time: pomo_text.clone(),
+                    pomo_running,
+                    pomo_progress,
                     water: self.water.glasses,
+                    water_prev: self.water_prev,
+                    water_num_t: self.water_num_anim.value,
+                    water_dir: self.water_dir,
+                    water_hours,
+                    water_cur_hour,
+                    water_bars_t: self.water_bars_open.value,
+                    water_bump,
                     goal: self.cfg.agua_meta.max(1),
                     weather_glyph: wglyph,
                     weather: &wtext,
                     events: &events,
                     cal_hint: &self.cal_msg,
                     todos: todo_slice,
+                    todo_strikes: &todo_strikes,
+                    todo_pop,
+                    todo_done,
+                    todo_done_prev: self.todo_done_prev,
+                    todo_count_t: self.todo_count_anim.value,
+                    todo_count_dir: self.todo_count_dir,
+                    todo_total: self.todo.items.len(),
+                    todo_scroll: self.todo_scroll,
+                    todo_input: &self.todo_input,
+                    todo_focused: false,
+                    todo_caret: false,
+                }),
+            )),
+            3 => Some((
+                pl,
+                PrevSub::Shelf(ShelfView {
+                    tiles: &tiles,
+                    drop_hover: false,
+                    enter: 1.0,
+                    new_count: 0,
+                }),
+            )),
+            4 => Some((pl, PrevSub::Clip(ClipView { items: &self.clip.items, copied: self.clip_copied }))),
+            5 => Some((pl, PrevSub::Mixer(MixerView { rows: &self.prev_mixer_rows, drag: None }))),
+            6 if has_media => Some((pl, PrevSub::Lyrics(lyrics_view))),
+            _ => None,
+        });
+
+        let frame = Frame {
+            cx,
+            shape_w: w,
+            shape_h: h,
+            radius,
+            ear,
+            expand: self.expand.value,
+            content_vis: self.content_vis.value,
+            transparent: self.cfg.transparente,
+            collapsed,
+            pill_morph: self.pill_morph.value,
+            prev_collapsed: self.prev_collapsed.as_ref(),
+            expanded,
+            layout,
+            page_morph: self.page_morph.value,
+            page_dir: self.page_dir,
+            prev_sub,
+            hover: self.hover_btn,
+            pressed,
+            mascot_vis: self.mascot_vis.value,
+            accent: (self.aura[0].value, self.aura[1].value, self.aura[2].value),
+            pill_glow_line: self.cfg.linea_luz,
+            pomo_breath,
+            active_page,
+            float_gap,
+            eq_t,
+            clip: if self.clip_on { Some(ClipView { items: &self.clip.items, copied: self.clip_copied }) } else { None },
+            shelf: if self.shelf_on {
+                Some(ShelfView {
+                    tiles: &tiles,
+                    drop_hover: self.drop_hover,
+                    enter: self.shelf_enter.value,
+                    new_count: self.shelf_new_count,
+                })
+            } else {
+                None
+            },
+            today: if self.today_on {
+                Some(TodayView {
+                    pomo_label,
+                    pomo_time: pomo_text,
+                    pomo_running,
+                    pomo_progress,
+                    water: self.water.glasses,
+                    water_prev: self.water_prev,
+                    water_num_t: self.water_num_anim.value,
+                    water_dir: self.water_dir,
+                    water_hours,
+                    water_cur_hour,
+                    water_bars_t: self.water_bars_open.value,
+                    water_bump,
+                    goal: self.cfg.agua_meta.max(1),
+                    weather_glyph: wglyph,
+                    weather: &wtext,
+                    events: &events,
+                    cal_hint: &self.cal_msg,
+                    todos: todo_slice,
+                    todo_strikes: &todo_strikes,
+                    todo_pop,
+                    todo_done,
+                    todo_done_prev: self.todo_done_prev,
+                    todo_count_t: self.todo_count_anim.value,
+                    todo_count_dir: self.todo_count_dir,
                     todo_total: self.todo.items.len(),
                     todo_scroll: self.todo_scroll,
                     todo_input: &self.todo_input,
@@ -272,26 +448,8 @@ impl App {
                     loading: ask.loading,
                     response: &ask.response,
                     copied: ask.copied_feedback,
-                    has_clip: !self.clip.items.is_empty(),
-                    pet: self.cfg.pet().map(|p| {
-                        let mut e = self.mascot.eyes();
-                        e.scale = 1.0;
-                        if ask.loading {
-                            // Pensando: mira arriba y de lado a lado, despacito.
-                            let t = self.anim_start.elapsed().as_secs_f32();
-                            e.gaze = ((t * 2.2).sin() * 1.6, -1.3);
-                        } else if ask.focus && !ask.input.is_empty() {
-                            // Escribiendo: mira hacia el input.
-                            e.gaze = (0.0, 1.6);
-                        } else {
-                            e.gaze = (0.0, 0.0);
-                        }
-                        if e.mood == Mood::Asleep {
-                            e.open = 1.0;
-                            e.mood = Mood::Awake;
-                        }
-                        (e, p)
-                    }),
+                    has_clip,
+                    pet: ask_pet,
                 })
             } else {
                 None

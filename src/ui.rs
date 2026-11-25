@@ -145,6 +145,9 @@ impl R {
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.l && x <= self.r && y >= self.t && y <= self.b
     }
+    pub fn cx(&self) -> f32 {
+        (self.l + self.r) / 2.0
+    }
     pub fn cy(&self) -> f32 {
         (self.t + self.b) / 2.0
     }
