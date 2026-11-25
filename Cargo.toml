@@ -1,6 +1,6 @@
 [package]
 name = "esme"
-version = "0.9.1"
+version = "1.0.0"
 edition = "2021"
 description = "Esme: barra dinámica (notch vivo) para Windows 10/11"
 publish = false

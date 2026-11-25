@@ -209,8 +209,15 @@ impl App {
                     title: "",
                     rows: vec![row(
                         concat!("Esme ", env!("CARGO_PKG_VERSION")),
-                        "Barra dinámica para Windows 10 y 11, hecha en Rust.\nGratis, sin cuentas y 100 % local: unos 4 MB de memoria en reposo.",
-                        Control::Buttons(vec![("Ver en GitHub", Cmd::OpenRepo), ("Abrir carpeta de datos", Cmd::OpenData)]),
+                        {
+                            let base = "Barra dinámica para Windows 10 y 11, hecha en Rust.\nGratis, de código abierto, sin cuentas: unos 4 MB de memoria en reposo.";
+                            if s.status[3].is_empty() { base.to_string() } else { format!("{base}\n{}", s.status[3]) }
+                        },
+                        Control::Buttons(vec![
+                            ("Buscar actualizaciones", Cmd::CheckUpdate),
+                            ("GitHub", Cmd::OpenRepo),
+                            ("Carpeta de datos", Cmd::OpenData),
+                        ]),
                     )],
                 },
             ],
@@ -368,6 +375,10 @@ impl App {
             }
             st::WM_KEY_DONE => {
                 self.on_key_done();
+                Some(LRESULT(0))
+            }
+            st::WM_UPD_DONE => {
+                self.on_update_done();
                 Some(LRESULT(0))
             }
             WM_CLOSE => {
@@ -589,6 +600,20 @@ impl App {
                 self.set_status(2, "Key borrada");
             }
             Cmd::OpenRepo => open_url("https://github.com/Maurito2004/Esme"),
+            Cmd::CheckUpdate => {
+                let Some(s) = self.settings.as_mut() else { return };
+                s.status[3] = "Buscando en GitHub…".into();
+                let slot = s.upd.clone();
+                let hwnd = s.hwnd.0 as isize;
+                s.invalidate();
+                std::thread::spawn(move || {
+                    let res = update::check();
+                    *slot.lock().unwrap() = Some(res);
+                    unsafe {
+                        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), st::WM_UPD_DONE, WPARAM(0), LPARAM(0));
+                    }
+                });
+            }
             Cmd::OpenData => {
                 let dir = config::data_dir();
                 let _ = std::fs::create_dir_all(&dir);
@@ -617,6 +642,22 @@ impl App {
                 let _ = PostMessageW(Some(HWND(hwnd as *mut _)), st::WM_KEY_DONE, WPARAM(0), LPARAM(0));
             }
         });
+    }
+
+    fn on_update_done(&mut self) {
+        let Some(res) = self.settings.as_ref().and_then(|s| s.upd.lock().unwrap().take()) else { return };
+        let msg = match res {
+            Ok(update::Check::UpToDate) => format!("✓ Tenés la última versión ({})", env!("CARGO_PKG_VERSION")),
+            Ok(update::Check::Newer(tag, url)) => {
+                open_url(&url);
+                format!("¡Hay una versión nueva: {tag}! Te abrí la página para descargarla")
+            }
+            Err(e) => e,
+        };
+        self.set_status(3, msg);
+        if let Some(s) = &self.settings {
+            s.invalidate();
+        }
     }
 
     fn on_key_done(&mut self) {

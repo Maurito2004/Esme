@@ -393,7 +393,12 @@ impl App {
     /// 2) Libera cachés secundarios de Direct2D/WIC y ejecuta `IDXGIDevice3::Trim()`.
     /// 3) Devuelve páginas inactivas al sistema con `SetProcessWorkingSetSizeEx`.
     pub(crate) fn on_idle_trim(&mut self) {
-        if self.is_animating() || self.want_expanded() {
+        if self.want_expanded() {
+            return;
+        }
+        if self.is_animating() {
+            // Todavía se mueve algo (saludo, carátula nueva): lo intentamos de nuevo en un rato.
+            self.schedule_trim();
             return;
         }
         self.ensure_surface(false);

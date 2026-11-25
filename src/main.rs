@@ -31,6 +31,7 @@ mod render;
 mod settings;
 mod todo;
 mod tray;
+mod update;
 mod ui;
 mod wifi;
 

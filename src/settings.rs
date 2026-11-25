@@ -22,6 +22,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_GEO_DONE: u32 = WM_APP + 30;
 /// Mensaje propio: terminó la comprobación de la API key (lista de modelos).
 pub const WM_KEY_DONE: u32 = WM_APP + 31;
+/// Terminó la búsqueda de actualizaciones (hilo aparte).
+pub const WM_UPD_DONE: u32 = WM_APP + 32;
 /// Timer del cursor parpadeante del campo de texto.
 pub const T_CARET: usize = 1;
 
@@ -84,6 +86,7 @@ pub enum Cmd {
     KeyClear,
     OpenRepo,
     OpenData,
+    CheckUpdate,
 }
 
 /// Lo que pasa al hacer clic en algo.
@@ -148,8 +151,10 @@ pub struct Settings {
     pub focus: Option<Field>,
     pub city_text: String,
     pub caret_on: bool,
-    /// Mensajes de estado: 0 = ciudad, 1 = calendario, 2 = API key.
-    pub status: [String; 3],
+    /// Mensajes de estado: 0 = ciudad, 1 = calendario, 2 = API key, 3 = actualizaciones.
+    pub status: [String; 4],
+    /// Resultado de buscar actualizaciones.
+    pub upd: std::sync::Arc<std::sync::Mutex<Option<std::result::Result<crate::update::Check, String>>>>,
     pub geo: std::sync::Arc<std::sync::Mutex<Option<std::result::Result<(String, f64, f64), String>>>>,
     /// Resultado de comprobar la key: el modelo elegido o el error.
     pub key_check: std::sync::Arc<std::sync::Mutex<Option<std::result::Result<String, String>>>>,
@@ -274,6 +279,7 @@ impl Settings {
                 status: Default::default(),
                 geo: Default::default(),
                 key_check: Default::default(),
+                upd: Default::default(),
                 scroll: 0.0,
                 hover: None,
                 hits: Vec::new(),
