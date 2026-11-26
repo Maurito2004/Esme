@@ -6,7 +6,7 @@ Esme está preparado para firmarse gratis con [SignPath Foundation](https://sign
 ## Qué ya está hecho en el repo
 
 - **Licencia MIT** (`LICENSE`).
-- **Política de firma** en el `README.md` (sección *Firma de código*), como pide SignPath.
+- **Política de firma** en el `README.md` (sección *Code signing policy*, con roles, política de privacidad, cambios en el sistema y desinstalación; cada release la enlaza al pie), como pide SignPath.
 - **El exe lleva nombre, versión, autor y copyright** (`res/esme.rc`, compilado con `tools/build-res.ps1`).
 - **Compilación en GitHub Actions** (`.github/workflows/release.yml`): sube el exe sin firmar como
   artefacto `Esme-unsigned` y, si SignPath está configurado, lo manda a firmar y publica el firmado.

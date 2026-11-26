@@ -14,7 +14,7 @@ Gratis y de código abierto. Sin cuentas, sin publicidad y sin telemetría.
 4. Clic derecho en el ícono de la bandeja → **Ajustes…** para elegir mascota, clima, avisos y más.
 
 Para que arranque con Windows: Ajustes → General → Iniciar con Windows.
-Para desinstalar: Salir desde la bandeja y borrá el exe (y si querés, la carpeta `%APPDATA%\Esme`).
+Para desinstalar: mirá [Uninstall](#uninstall) (apagar el inicio con Windows, Salir y borrar el exe).
 
 **Ask Esme con IA es opcional**: la calculadora, las monedas y el timer andan sin nada. Para
 preguntarle a Gemini necesitás una API Key gratis de Google AI Studio (Ajustes → Ask Esme →
@@ -195,28 +195,73 @@ El proyecto compila sin `build.rs` ni dependencias con build scripts:
 ## Datos
 
 Todo en `%APPDATA%\Esme`: `config.json`, `portapapeles.json`, `estante.json`, `agua.json`,
-`todo.json` y `letras\`. Si venías de la versión "Noosa", la primera vez que abre Esme mueve esos
-datos y el inicio automático solo. Sin cuentas ni telemetría.
+`todo.json` y `letras\`. La API Key de Gemini va en el Administrador de credenciales de Windows.
+Sin cuentas ni telemetría.
 
 Esme solo se conecta a internet cuando usás algo que lo necesita: lrclib.net (letras), MET Norway
 y Open-Meteo (clima), tu calendario de Google (si pegaste la dirección), dolarapi.com y las tasas
 de cambio (monedas en Ask), Gemini (solo con tu key) y GitHub (solo al tocar "Buscar
-actualizaciones").
+actualizaciones"). El detalle de qué se envía está en la [política de privacidad](#privacy-policy).
 
-## Firma de código
+## Code signing policy
 
-Política de firma de código: las versiones publicadas en *Releases* se compilan en GitHub Actions a partir
-de este repositorio y, una vez aprobado el proyecto, se firman con el servicio gratuito
-[SignPath.io](https://about.signpath.io), con un certificado de
+> *En castellano:* las versiones de *Releases* se compilan en GitHub Actions desde este repo y se firman
+> con SignPath. Abajo están quién aprueba cada firma, qué conexiones hace Esme y cómo desinstalarlo.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
 [SignPath Foundation](https://signpath.org).
 
-- Autor y aprobador de las firmas: [Maurito2004](https://github.com/Maurito2004).
-- Solo se firma lo que sale de este repositorio a través del workflow `release.yml`; nada compilado a mano.
-- Privacidad: Esme no tiene telemetría. Solo se conecta a los servicios que usan sus funciones (letras,
-  clima, calendario que vos configures, Gemini si cargás tu API Key) y a la API pública de GitHub para
-  avisar de actualizaciones.
+Only `Esme.exe` built by the [`release.yml`](.github/workflows/release.yml) workflow from this
+repository is signed. Nothing built on a personal computer is ever signed, and Esme contains no
+third-party binaries.
 
-Cómo se configura: [docs/signpath/README.md](docs/signpath/README.md).
+### Team roles
+
+| Role | Members |
+|------|---------|
+| Authors (committers) | [Maurito2004](https://github.com/Maurito2004) |
+| Reviewers | [Maurito2004](https://github.com/Maurito2004): every pull request from someone else is reviewed before merging |
+| Approvers | [Maurito2004](https://github.com/Maurito2004): every signing request is approved by hand in SignPath |
+
+All team members use multi-factor authentication on GitHub and SignPath.
+
+### Privacy policy
+
+Esme has no telemetry, analytics or accounts, and it never sends your files, clipboard history or
+settings anywhere. It only connects to the internet when you use a feature that needs it:
+
+| Service | When | What is sent |
+|---------|------|--------------|
+| [lrclib.net](https://lrclib.net) | You open the lyrics view while music plays | Title, artist, album and length of the current song |
+| [Open-Meteo geocoding](https://open-meteo.com/en/terms) | You type your city in *Ajustes → Hoy* | The city name you typed |
+| [MET Norway](https://api.met.no/doc/TermsOfService) | You open the *Hoy* panel with weather on (then once an hour while Esme runs) | Coordinates of the city you chose. With no city set, Esme asks Windows for your approximate location, but only if you allowed location access in Windows |
+| Your calendar (e.g. [Google Calendar](https://policies.google.com/privacy)) | You pasted a private iCal address in *Ajustes → Hoy* | A request to that exact address |
+| [Google Gemini API](https://ai.google.dev/gemini-api/terms) | You use Ask, Translate, Summarize or Correct, with your own API key | The text you typed or the copied text you asked about, plus your key (in an HTTPS header). Saving the key also asks Google for the list of models |
+| [dolarapi.com](https://dolarapi.com) and [open.er-api.com](https://www.exchangerate-api.com/terms) | You type a currency conversion in Ask (e.g. `100 usd`) | Nothing personal: just the request for exchange rates |
+| [GitHub API](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement) | You click *Ajustes → Acerca de → Buscar actualizaciones* | The Esme version (in the User-Agent) |
+
+Buttons such as *Abrir Google Calendar*, *Conseguir key* or *GitHub* only open the page in your browser.
+Every connection uses HTTPS, and each service also sees your IP address, as with any website.
+
+### System changes
+
+Esme needs no administrator rights and installs no services or drivers. It changes only these things:
+
+- `%APPDATA%\Esme\`: settings, clipboard history, shelf, water, to-do and lyrics cache.
+- A shortcut `Esme.lnk` in your Startup folder (`shell:startup`), **only if you turn on** *Iniciar con
+  Windows*. Turning it off removes it.
+- Your Gemini API key, if you save one, in Windows *Credential Manager → Web credentials → "Esme"*.
+- While it runs, it registers the shortcuts Ctrl+Alt+T (OCR) and Ctrl+Alt+Space (Ask). Windows releases
+  them when Esme closes.
+
+### Uninstall
+
+1. Right-click the tray icon → *Ajustes* → turn off *Iniciar con Windows*, then right-click → *Salir*.
+2. Delete `Esme.exe`.
+3. Optional, to also delete your data: delete the folder `%APPDATA%\Esme`. If you saved a Gemini key,
+   remove the "Esme" entry in *Credential Manager → Web credentials*.
+
+How the signing is configured: [docs/signpath/README.md](docs/signpath/README.md).
 
 ## Licencia
 
