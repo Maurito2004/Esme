@@ -1,17 +1,10 @@
-//! Configuración persistente en %APPDATA%\Esme\config.json y autoarranque (HKCU\...\Run).
+//! Configuración persistente en %APPDATA%\Esme\config.json y autoarranque (acceso directo en Inicio).
 
 use nanoserde::{DeJson, SerJson};
 use std::path::PathBuf;
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::ERROR_SUCCESS;
-use windows::Win32::System::Registry::{
-    RegDeleteKeyValueW, RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ,
-};
+use windows::core::HSTRING;
+use windows::Security::Credentials::{PasswordCredential, PasswordVault};
 
-const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_VALUE: PCWSTR = w!("Esme");
-/// Nombre anterior de la app (para migrar el inicio automático).
-const OLD_RUN_VALUE: PCWSTR = w!("Noosa");
 
 #[derive(SerJson, DeJson, Clone, Debug)]
 pub struct Config {
@@ -55,9 +48,13 @@ pub struct Config {
     /// Familia elegida en Ajustes: "flash" (por defecto), "flash-lite" o "pro".
     #[nserde(default)]
     pub gemini_familia: String,
-    /// API Key de Gemini cifrada con Windows DPAPI (en hexadecimal, atada al usuario actual de Windows).
+    /// Obsoleto (hasta v1.0.1 la key iba cifrada acá). Se vacía al arrancar; ahora vive en el
+    /// Administrador de credenciales de Windows.
     #[nserde(default)]
     pub gemini_key_dpapi: String,
+    /// Hay una API Key de Gemini guardada en el Administrador de credenciales de Windows.
+    #[nserde(default)]
+    pub gemini_key_guardada: bool,
 
     // ---------- Fase 8: Ajustes ----------
     /// Tamaño del notch en % (100, 115 o 130) sobre la escala de Windows.
@@ -120,6 +117,7 @@ impl Default for Config {
             gemini_model: String::new(),
             gemini_familia: "flash".into(),
             gemini_key_dpapi: String::new(),
+            gemini_key_guardada: false,
             tamano: 100,
             ciudad: String::new(),
             ciudad_lat: 0.0,
@@ -182,15 +180,6 @@ pub fn migrate_from_noosa() {
             let _ = std::fs::rename(&old, &new);
         }
     }
-    // Versiones anteriores usaban la clave Run del Registro: pasamos a un acceso directo.
-    for name in [OLD_RUN_VALUE, RUN_VALUE] {
-        if had_run_value(name) {
-            unsafe {
-                let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, name);
-            }
-            set_autostart(true);
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -227,6 +216,11 @@ impl Config {
             .or_else(|| read_config(&backup_path()))
             .unwrap_or_default();
         let mut cfg: Config = cfg;
+        // La key cifrada de versiones viejas ya no se usa: hay que volver a pegarla una vez.
+        if !cfg.gemini_key_dpapi.is_empty() {
+            cfg.gemini_key_dpapi.clear();
+            let _ = cfg.save();
+        }
         if !cfg.mascota {
             cfg.mascota_tipo = "off".into();
         }
@@ -274,16 +268,18 @@ impl Config {
         std::fs::rename(&tmp, &path)
     }
 
-    /// Cifra y guarda la API Key de Gemini con Windows DPAPI (`CryptProtectData`).
+    /// Guarda la API Key de Gemini en el Administrador de credenciales de Windows
+    /// (Credenciales web → "Esme"). Vacía = borrarla.
     pub fn set_gemini_api_key(&mut self, plain_key: &str) -> bool {
         let trimmed = plain_key.trim();
+        vault_remove();
         if trimmed.is_empty() {
-            self.gemini_key_dpapi.clear();
+            self.gemini_key_guardada = false;
             let _ = self.save();
             return true;
         }
-        if let Some(enc_hex) = dpapi_encrypt(trimmed.as_bytes()) {
-            self.gemini_key_dpapi = enc_hex;
+        if vault_set(trimmed) {
+            self.gemini_key_guardada = true;
             let _ = self.save();
             true
         } else {
@@ -291,130 +287,50 @@ impl Config {
         }
     }
 
-    /// Descifra en memoria la API Key de Gemini con Windows DPAPI (`CryptUnprotectData`).
+    /// Lee la API Key de Gemini del Administrador de credenciales (solo en memoria, al usarla).
     pub fn gemini_api_key(&self) -> Option<String> {
-        if self.gemini_key_dpapi.trim().is_empty() {
+        if !self.gemini_key_guardada {
             return None;
         }
-        let raw = dpapi_decrypt(&self.gemini_key_dpapi)?;
-        String::from_utf8(raw).ok()
+        vault_get()
     }
 
     pub fn has_gemini_key(&self) -> bool {
-        !self.gemini_key_dpapi.trim().is_empty()
+        self.gemini_key_guardada
     }
 }
 
-// ---------- Windows DPAPI (CryptProtectData / CryptUnprotectData en crypt32.dll) ----------
+// ---------- Administrador de credenciales de Windows (Windows.Security.Credentials) ----------
 
-#[repr(C)]
-struct CryptDataBlob {
-    cb_data: u32,
-    pb_data: *mut u8,
+const VAULT_RESOURCE: &str = "Esme";
+const VAULT_USER: &str = "Gemini API Key";
+
+fn vault_set(key: &str) -> bool {
+    let res = (|| -> windows::core::Result<()> {
+        let vault = PasswordVault::new()?;
+        let cred = PasswordCredential::CreatePasswordCredential(
+            &HSTRING::from(VAULT_RESOURCE),
+            &HSTRING::from(VAULT_USER),
+            &HSTRING::from(key),
+        )?;
+        vault.Add(&cred)
+    })();
+    res.is_ok()
 }
 
-const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
-
-#[link(name = "crypt32")]
-extern "system" {
-    fn CryptProtectData(
-        p_data_in: *const CryptDataBlob,
-        sz_data_descr: PCWSTR,
-        p_optional_entropy: *const CryptDataBlob,
-        pv_reserved: *mut core::ffi::c_void,
-        p_prompt_struct: *mut core::ffi::c_void,
-        dw_flags: u32,
-        p_data_out: *mut CryptDataBlob,
-    ) -> i32;
-
-    fn CryptUnprotectData(
-        p_data_in: *const CryptDataBlob,
-        ppsz_data_descr: *mut PWSTR,
-        p_optional_entropy: *const CryptDataBlob,
-        pv_reserved: *mut core::ffi::c_void,
-        p_prompt_struct: *mut core::ffi::c_void,
-        dw_flags: u32,
-        p_data_out: *mut CryptDataBlob,
-    ) -> i32;
+fn vault_get() -> Option<String> {
+    let vault = PasswordVault::new().ok()?;
+    let cred = vault.Retrieve(&HSTRING::from(VAULT_RESOURCE), &HSTRING::from(VAULT_USER)).ok()?;
+    cred.RetrievePassword().ok()?;
+    let key = cred.Password().ok()?.to_string_lossy();
+    (!key.is_empty()).then_some(key)
 }
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn LocalFree(h_mem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-}
-
-type PWSTR = *mut u16;
-
-fn dpapi_encrypt(plain: &[u8]) -> Option<String> {
-    if plain.is_empty() {
-        return None;
-    }
-    unsafe {
-        let mut buf = plain.to_vec();
-        let input = CryptDataBlob {
-            cb_data: buf.len() as u32,
-            pb_data: buf.as_mut_ptr(),
-        };
-        let mut output = CryptDataBlob {
-            cb_data: 0,
-            pb_data: std::ptr::null_mut(),
-        };
-        let ok = CryptProtectData(
-            &input,
-            w!("EsmeGeminiKey"),
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        );
-        if ok == 0 || output.pb_data.is_null() {
-            return None;
+fn vault_remove() {
+    if let Ok(vault) = PasswordVault::new() {
+        if let Ok(cred) = vault.Retrieve(&HSTRING::from(VAULT_RESOURCE), &HSTRING::from(VAULT_USER)) {
+            let _ = vault.Remove(&cred);
         }
-        let bytes = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize);
-        let mut hex = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            hex.push_str(&format!("{b:02x}"));
-        }
-        let _ = LocalFree(output.pb_data as *mut _);
-        Some(hex)
-    }
-}
-
-fn dpapi_decrypt(hex_str: &str) -> Option<Vec<u8>> {
-    let hex = hex_str.trim();
-    if hex.is_empty() || hex.len() % 2 != 0 {
-        return None;
-    }
-    let mut enc = Vec::with_capacity(hex.len() / 2);
-    for i in (0..hex.len()).step_by(2) {
-        let b = u8::from_str_radix(&hex[i..i + 2], 16).ok()?;
-        enc.push(b);
-    }
-    unsafe {
-        let input = CryptDataBlob {
-            cb_data: enc.len() as u32,
-            pb_data: enc.as_mut_ptr(),
-        };
-        let mut output = CryptDataBlob {
-            cb_data: 0,
-            pb_data: std::ptr::null_mut(),
-        };
-        let ok = CryptUnprotectData(
-            &input,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        );
-        if ok == 0 || output.pb_data.is_null() {
-            return None;
-        }
-        let plain = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec();
-        let _ = LocalFree(output.pb_data as *mut _);
-        Some(plain)
     }
 }
 
@@ -424,14 +340,37 @@ fn startup_link() -> Option<PathBuf> {
     Some(base.join("Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Esme.lnk"))
 }
 
-/// Valor que ponían en el Registro las versiones anteriores ("Esme" o "Noosa").
-fn had_run_value(name: PCWSTR) -> bool {
-    let mut size = 0u32;
-    unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, name, RRF_RT_REG_SZ, None, None, Some(&mut size)) == ERROR_SUCCESS }
-}
-
 pub fn autostart_enabled() -> bool {
     startup_link().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Si el inicio con Windows está activado pero el acceso directo apunta a otro exe (porque el
+/// usuario movió o actualizó Esme en otra carpeta), lo corrige. Si ya apunta acá, no toca nada.
+pub fn fix_autostart_target() {
+    let Some(link) = startup_link() else { return };
+    if !link.exists() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    use windows::core::Interface;
+    use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM_READ};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    let target = unsafe {
+        let Ok(sl) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else { return };
+        let Ok(pf) = sl.cast::<IPersistFile>() else { return };
+        if pf.Load(&HSTRING::from(link.as_os_str()), STGM_READ).is_err() {
+            return;
+        }
+        let mut buf = [0u16; 520];
+        if sl.GetPath(&mut buf, std::ptr::null_mut(), 0).is_err() {
+            return;
+        }
+        let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..n])
+    };
+    if !target.eq_ignore_ascii_case(&exe.to_string_lossy()) {
+        set_autostart(true);
+    }
 }
 
 /// Iniciar con Windows mediante un acceso directo en la carpeta Inicio (como la mayoría de las apps).

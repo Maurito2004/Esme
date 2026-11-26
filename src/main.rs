@@ -373,9 +373,8 @@ fn main() -> Result<()> {
 
         config::migrate_from_noosa();
         // Si el exe se movió o se actualizó en otra carpeta, el acceso directo de Inicio apunta al exe actual.
-        if config::autostart_enabled() {
-            config::set_autostart(true);
-        }
+        // Solo se reescribe cuando apunta a otro lado: nunca en cada arranque.
+        config::fix_autostart_target();
         let cfg = Config::load();
         let mut qpf = 0i64;
         let _ = QueryPerformanceFrequency(&mut qpf);

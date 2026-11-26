@@ -87,7 +87,7 @@ impl App {
     }
 
     pub(crate) fn on_wifi(&mut self) {
-        let Some(ev) = wifi::take_event() else { return };
+        let Some(ev) = self._wifi.as_mut().and_then(|w| w.take_event()) else { return };
         if !self.cfg.aviso_wifi {
             return;
         }

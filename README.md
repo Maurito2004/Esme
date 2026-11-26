@@ -100,7 +100,7 @@ en qué Windows.
 - **Timer rápido**: `timer 10m`, `timer 45s`, `timer 1h 30m` + Enter; la píldora muestra la cuenta.
 - **Preguntar / Traducir** (Tab cambia de modo) y **Resumir clip** / **Corregir** lo copiado, con
   Gemini. Necesita tu propia API Key gratuita de Google AI Studio: copiala y elegí Ajustes →
-  Ask Esme → Pegar key. Se guarda cifrada con Windows (DPAPI), atada a tu
+  Ask Esme → Pegar key. Se guarda en el Administrador de credenciales de Windows, atada a tu
   usuario, y viaja en un header HTTPS, nunca en la URL.
 
 **Fase 7 — optimización**

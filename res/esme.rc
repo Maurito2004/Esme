@@ -6,8 +6,8 @@
 1 24 "esme.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,1,0
- PRODUCTVERSION 1,0,1,0
+ FILEVERSION 1,0,2,0
+ PRODUCTVERSION 1,0,2,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -20,12 +20,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Maurito2004 (github.com/Maurito2004/Esme)"
             VALUE "FileDescription", "Esme - barra dinamica para Windows"
-            VALUE "FileVersion", "1.0.1"
+            VALUE "FileVersion", "1.0.2"
             VALUE "InternalName", "esme"
             VALUE "LegalCopyright", "Copyright (c) 2026 Maurito2004. MIT License."
             VALUE "OriginalFilename", "Esme.exe"
             VALUE "ProductName", "Esme"
-            VALUE "ProductVersion", "1.0.1"
+            VALUE "ProductVersion", "1.0.2"
         END
     END
     BLOCK "VarFileInfo"

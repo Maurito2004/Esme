@@ -2,4 +2,5 @@
 # Se genera con tools\build-res.ps1; no hace falta build.rs.
 # Ruta relativa a la raíz del proyecto (cargo compila desde ahí).
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-L", "native=res"]
+# crt-static: el exe no depende de VCRUNTIME140.dll (funciona en PCs sin el redistribuible de Visual C++).
+rustflags = ["-L", "native=res", "-C", "target-feature=+crt-static"]
